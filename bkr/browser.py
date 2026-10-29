@@ -83,15 +83,19 @@ def browser_runtime():
 
 
 def launch_context(p, headless: bool = False):
-    """返回 BrowserContext。CDP 模式接管真实 Chrome，否则启动持久化 profile。"""
+    """返回 BrowserContext。CDP 优先；连不上则回退到本地浏览器（Edge/Chrome/内置）。"""
     if CDP_URL:
-        browser = p.chromium.connect_over_cdp(CDP_URL)
-        ctx = browser.contexts[0] if browser.contexts else browser.new_context()
         try:
-            ctx._bkr_owned = False  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        return ctx
+            browser = p.chromium.connect_over_cdp(CDP_URL)
+            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            try:
+                ctx._bkr_owned = False  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            print(f"[browser] 已接管 CDP：{CDP_URL}")
+            return ctx
+        except Exception as exc:
+            print(f"[browser] 连接 CDP 失败（{exc}），回退启动本地浏览器")
 
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     launch_kwargs = dict(

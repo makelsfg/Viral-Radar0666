@@ -1,4 +1,5 @@
 """引擎选择、CDP 关闭保护、Apify 映射与价格护栏单测（不访问网络）。"""
+import bkr.browser as browser_mod
 from bkr.browser import close_context, engine_name
 from bkr.collector import _price_guard
 from bkr.providers.apify_tmall import map_to_product
@@ -61,12 +62,22 @@ class _DummyCtx:
 
 
 def test_close_context_owned():
-    ctx = _DummyCtx(owned=True)
-    close_context(ctx)
-    assert ctx.closed is True
+    old_cdp = browser_mod.CDP_URL
+    browser_mod.CDP_URL = ""
+    try:
+        ctx = _DummyCtx(owned=True)
+        close_context(ctx)
+        assert ctx.closed is True
+    finally:
+        browser_mod.CDP_URL = old_cdp
 
 
 def test_close_context_not_owned():
-    ctx = _DummyCtx(owned=False)
-    close_context(ctx)
-    assert ctx.closed is False
+    old_cdp = browser_mod.CDP_URL
+    browser_mod.CDP_URL = ""
+    try:
+        ctx = _DummyCtx(owned=False)
+        close_context(ctx)
+        assert ctx.closed is False
+    finally:
+        browser_mod.CDP_URL = old_cdp
