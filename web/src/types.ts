@@ -1,0 +1,127 @@
+export interface TaskInfo {
+  task_id: string
+  name: string
+  keywords: string
+  pages: number
+  detail_top: number
+  batches: string[]
+}
+
+export interface ProductRow {
+  item_id: string
+  title: string | null
+  image_url: string | null
+  price_final: number | null
+  sold_text: string | null
+  sold_lb: number | null
+  cart_text: string | null
+  cart_lb: number | null
+  shop_name: string | null
+  shop_rating: number | null
+  positive_rate: string | null
+  rank: number | null
+  captured_at: string | null
+  product_url: string | null
+  params: Record<string, string>
+  skus: string[]
+  sku_count: number
+}
+
+export interface ProductDetail {
+  item_id: string
+  title: string | null
+  image_url: string | null
+  shop_name: string | null
+  shop_rating: number | null
+  positive_rate: string | null
+  params: Record<string, string>
+  skus: string[]
+  product_url: string | null
+  history: Array<{
+    batch: string
+    price_final: number | null
+    sold_lb: number | null
+    cart_lb: number | null
+    captured_at: string | null
+  }>
+}
+
+export interface JobState {
+  id: string
+  type: 'collect' | 'login'
+  status: string
+  stage: string | null
+  page_done: number
+  pages: number
+  items_count: number
+  detail_done: number
+  detail_total: number
+  batch?: string
+  task_id?: string
+  task_name?: string
+  message?: string | null
+  error?: string | null
+}
+
+export interface SseEvent {
+  type: 'job'
+  job: JobState
+}
+
+export interface AnalysisBand {
+  label: string
+  count: number
+  sold?: number
+  min?: number
+  max?: number
+}
+
+export interface AnalysisSummary {
+  counts: {
+    candidates: number
+    detailed: number
+    with_price: number
+    with_price_detail?: number
+    with_price_list?: number
+    with_sold: number
+  }
+  price: {
+    stats: {
+      count: number
+      min?: number
+      p25?: number
+      median?: number
+      p75?: number
+      max?: number
+      avg?: number
+    }
+    bands: AnalysisBand[]
+  }
+  sold: { bands: AnalysisBand[]; median: number | null }
+  shops: {
+    shops: { name: string; count: number; sold: number }[]
+    distinct: number
+    top5_share: number
+  }
+  keywords: { word: string; count: number }[]
+  params: { key: string; coverage: number; top: { value: string; count: number }[] }[]
+  clusters: {
+    cluster: string
+    count: number
+    avg_price: number | null
+    avg_sold: number
+    example: string
+  }[]
+  top_products: {
+    item_id: string
+    title: string | null
+    price_final: number | null
+    sold_text: string | null
+    sold_lb: number | null
+    cart_lb: number | null
+    shop_name: string | null
+    image_url: string | null
+    product_url: string | null
+    is_detail: number
+  }[]
+}
