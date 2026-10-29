@@ -190,37 +190,38 @@ class JobManager:
 
     def _run_login(self, job: dict) -> None:
         try:
-            from playwright.sync_api import sync_playwright
-
-            from bkr.browser import launch_context
+            from bkr.browser import browser_runtime, close_context, launch_context
             from bkr.config import STATE_PATH
 
-            with sync_playwright() as p:
+            with browser_runtime() as p:
                 ctx = launch_context(p)
-                page = ctx.pages[0] if ctx.pages else ctx.new_page()
-                page.goto("https://www.taobao.com", wait_until="domcontentloaded")
-                deadline = time.time() + 300
-                logged = False
-                while time.time() < deadline:
+                page = ctx.new_page()
+                try:
+                    page.goto("https://www.taobao.com", wait_until="domcontentloaded")
+                    deadline = time.time() + 300
+                    logged = False
+                    while time.time() < deadline:
+                        try:
+                            names = {c.get("name") for c in ctx.cookies()}
+                        except Exception:
+                            break
+                        if {"unb", "tracknick"} & names:
+                            logged = True
+                            break
+                        time.sleep(2)
+                    if logged:
+                        try:
+                            ctx.storage_state(path=str(STATE_PATH))
+                        except Exception:
+                            pass
+                    job["status"] = "done" if logged else "timeout"
+                    job["message"] = "登录成功" if logged else "5 分钟内未检测到登录，请重试"
+                finally:
                     try:
-                        names = {c.get("name") for c in ctx.cookies()}
-                    except Exception:
-                        break
-                    if {"unb", "tracknick"} & names:
-                        logged = True
-                        break
-                    time.sleep(2)
-                if logged:
-                    try:
-                        ctx.storage_state(path=str(STATE_PATH))
+                        page.close()
                     except Exception:
                         pass
-                job["status"] = "done" if logged else "timeout"
-                job["message"] = "登录成功" if logged else "5 分钟内未检测到登录，请重试"
-                try:
-                    ctx.close()
-                except Exception:
-                    pass
+                    close_context(ctx)
         except Exception as exc:  # noqa: BLE001
             job["status"] = "failed"
             job["error"] = f"{type(exc).__name__}: {exc}"

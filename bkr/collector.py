@@ -1,13 +1,21 @@
-"""采集编排：搜索页 → Top N 详情（模拟点击进入） → 入库，支持断点续采。"""
+"""采集编排：搜索页 → 详情（本地点击或 Apify 通道） → 入库，支持断点续采。"""
 from __future__ import annotations
 
 import json
+import os
 import random
 import time
 from datetime import datetime
 
 from . import db
-from .browser import BlockedError, EmptyResultError, LoginError, launch_context
+from .browser import (
+    BlockedError,
+    EmptyResultError,
+    LoginError,
+    browser_runtime,
+    close_context,
+    launch_context,
+)
 from .config import RAW_DIR
 from .detail_collector import click_and_extract
 from .list_collector import collect_pages, open_search_page
@@ -20,9 +28,146 @@ def batch_id(now: datetime | None = None) -> str:
     return now.strftime("%Y-%m-%d_%H%M%S")
 
 
-def run_task(task, batch: str | None = None, resume: bool = False) -> None:
-    from playwright.sync_api import sync_playwright
+def _price_guard(detail_price, list_price):
+    """详情价缺失或与列表价偏离过大时回退列表价。"""
+    if list_price is None:
+        return detail_price
+    if detail_price is None:
+        return list_price
+    if detail_price < list_price * 0.3 or detail_price > list_price * 3:
+        return list_price
+    return detail_price
 
+
+def _enrich_with_apify(conn, task, batch: str, pending: list[dict], raw_dir) -> None:
+    from .providers.apify_tmall import fetch_details, map_to_product
+
+    token = (os.environ.get("BK_APIFY_TOKEN") or "").strip()
+    if not token:
+        raise RuntimeError(
+            "详情通道为 apify，但未配置 token（settings.yaml → apify.token 或 BK_APIFY_TOKEN）"
+        )
+    actor = (os.environ.get("BK_APIFY_ACTOR") or "unitbytes~taobao-tmall-scraper").strip()
+
+    print(f"  [apify] 提交 {len(pending)} 个商品，等待结果（最长 300 秒）…")
+    items = fetch_details([r["item_id"] for r in pending], token, actor=actor)
+    by_id = {str(it.get("itemId")): it for it in items}
+
+    found = 0
+    for r in pending:
+        iid = r["item_id"]
+        it = by_id.get(str(iid))
+        if not it:
+            print(f"  [apify] 未返回详情：{iid}")
+            continue
+        rec = map_to_product(it)
+        price_final = _price_guard(
+            rec["price_final"], parse_price(r.get("price_text") or "")
+        )
+        payload = dict(rec, source="apify")
+        (raw_dir / f"{iid}.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        db.upsert_product(conn, {
+            "item_id": iid,
+            "title": rec["title"] or r.get("title") or "",
+            "shop_name": rec["shop_name"] or r.get("shop_name"),
+            "shop_rating": rec["shop_rating"],
+            "positive_rate": rec["positive_rate"],
+            "sku_names": json.dumps(rec["sku_names"], ensure_ascii=False),
+            "params_json": json.dumps(rec["params"], ensure_ascii=False),
+            "image_url": rec["image_url"] or r.get("image_url"),
+            "video_url": rec["video_url"],
+            "product_url": rec["product_url"]
+            or f"https://detail.tmall.com/item.htm?id={iid}",
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "first_seen_at": datetime.now().isoformat(timespec="seconds"),
+        })
+        db.set_snapshot_detail(conn, task.task_id, iid, batch, price_final)
+        found += 1
+        db.set_batch(conn, batch, task.task_id, stage="detail", detail_done=found)
+
+    print(f"  [apify] 补全 {found}/{len(pending)} 个详情")
+    if found == 0:
+        raise RuntimeError("Apify 未返回任何详情数据（检查 token / 额度 / actor 名称）")
+
+
+def _collect_details_by_click(
+    conn, ctx, task, batch: str, pending: list[dict], done_count: int, raw_dir
+) -> int:
+    """本地通道：在搜索结果页点击进入详情，拟人节奏。返回已处理数量。"""
+    by_page: dict[int, list] = {}
+    for r in pending:
+        by_page.setdefault(int(r.get("page_no") or 1), []).append(r)
+
+    processed = 0
+    for pageno in sorted(by_page):
+        items = by_page[pageno]
+        print(f"  打开搜索结果第 {pageno} 页，准备点击进入 {len(items)} 个详情")
+        list_page = open_search_page(ctx, task, pageno)
+        try:
+            # 先像真人一样随意浏览一会儿列表，再开始点
+            for _ in range(random.randint(2, 4)):
+                try:
+                    list_page.mouse.wheel(0, random.randint(300, 900))
+                    list_page.wait_for_timeout(random.randint(1500, 3000))
+                except Exception:
+                    pass
+
+            for r in items:
+                iid = r["item_id"]
+                print(f"  -> 详情 {processed + 1}/{len(pending)}：{iid}")
+                detail = click_and_extract(ctx, list_page, iid, save_html=task.save_html)
+
+                price_final = _price_guard(
+                    detail["price_final"], parse_price(r.get("price_text") or "")
+                )
+                if price_final != detail["price_final"]:
+                    print(
+                        f"    [价格修正] 详情价 {detail['price_final']} 与列表价偏差过大，回退列表价 {price_final}"
+                    )
+
+                html = detail.pop("_html", None)
+                if html:
+                    (raw_dir / f"{iid}.html").write_text(html, encoding="utf-8")
+                (raw_dir / f"{iid}.json").write_text(
+                    json.dumps(detail, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+
+                db.upsert_product(conn, {
+                    "item_id": iid,
+                    "title": detail["title"] or r.get("title") or "",
+                    "shop_name": detail["shop_name"] or r.get("shop_name"),
+                    "shop_rating": detail["shop_rating"],
+                    "positive_rate": detail["positive_rate"],
+                    "sku_names": json.dumps(detail["sku_names"], ensure_ascii=False),
+                    "params_json": json.dumps(detail["params"], ensure_ascii=False),
+                    "image_url": detail["image_url"] or r.get("image_url"),
+                    "video_url": detail["video_url"],
+                    "product_url": detail["product_url"],
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                    "first_seen_at": datetime.now().isoformat(timespec="seconds"),
+                })
+                db.set_snapshot_detail(conn, task.task_id, iid, batch, price_final)
+                processed += 1
+                db.set_batch(conn, batch, task.task_id, stage="detail",
+                             detail_done=done_count + processed)
+
+                # 拟人节奏：单个 20–40s；每 2 个额外休息 90–180s
+                pause = random.uniform(20.0, 40.0)
+                if processed % 2 == 0:
+                    pause += random.uniform(90.0, 180.0)
+                    print(f"  （休息 {pause:.0f} 秒，模拟正常浏览节奏）")
+                time.sleep(pause)
+        finally:
+            try:
+                list_page.close()
+            except Exception:
+                pass
+    return processed
+
+
+def run_task(task, batch: str | None = None, resume: bool = False) -> None:
     batch = batch or batch_id()
     conn = db.connect()
     db.upsert_task(conn, task)
@@ -34,7 +179,6 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
 
     db.ensure_batch(conn, batch, task.task_id)
     if not resume:
-        # 非续采：重置进度（包括上次空结果/失败留下的状态），允许直接重跑
         db.reset_batch_progress(conn, batch, task.task_id)
     db.set_batch(
         conn, batch, task.task_id,
@@ -55,13 +199,13 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        with sync_playwright() as p:
+        with browser_runtime() as p:
             ctx = launch_context(p)
             try:
                 row = db.get_batch(conn, batch, task.task_id) or {}
                 page_done = int(row.get("page_done") or 0)
 
-                # 阶段一：搜索页（若未完成）
+                # 阶段一：搜索页
                 if page_done < task.pages:
                     print(f"[{task.task_id}] 采集搜索页（{task.pages} 页，天猫 tab）")
                     cards = collect_pages(ctx, task, start_page=1)
@@ -82,20 +226,20 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                 else:
                     print(f"[{task.task_id}] 搜索页已完成，跳过")
 
-                # 阶段二：详情（按页面顺序模拟点击进入，保留 Referer/浏览历史）
+                # 阶段二：详情（本地点击或 Apify 通道）
                 candidates = db.list_candidates(
                     conn, task.task_id, batch, task.detail_top, order=task.detail_order
                 )
                 pending = [r for r in candidates if not r["is_detail"]]
                 done_count = len(candidates) - len(pending)
+                provider = (os.environ.get("BK_DETAIL_PROVIDER") or "local").strip().lower()
                 order_text = "页面顺序" if task.detail_order == "rank" else "已售优先"
                 print(
                     f"[{task.task_id}] 详情采集：待采 {len(pending)} / 共 {len(candidates)}"
-                    f"（顺序：{order_text}）"
+                    f"（通道：{provider}，顺序：{order_text}）"
                 )
 
                 if pending:
-                    # 今日详情总量提醒：新号/新环境建议每天 ≤10 个详情
                     today = datetime.now().strftime("%Y-%m-%d")
                     try:
                         today_details = conn.execute(
@@ -106,82 +250,17 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                         today_details = 0
                     if today_details >= 10:
                         print(
-                            f"⚠ 今日已采集详情 {today_details} 个，建议明天再继续；"
-                            "高频连续采详情是触发风控的主要来源。"
+                            f"⚠ 今日已采集详情 {today_details} 个，建议降低频率；"
+                            "同类目连续采详情是触发风控的主要来源。"
                         )
 
-                    by_page: dict[int, list] = {}
-                    for r in pending:
-                        by_page.setdefault(int(r.get("page_no") or 1), []).append(r)
-
-                    processed = 0
-                    for pageno in sorted(by_page):
-                        items = by_page[pageno]
-                        print(f"  打开搜索结果第 {pageno} 页，准备点击进入 {len(items)} 个详情")
-                        list_page = open_search_page(ctx, task, pageno)
-                        try:
-                            # 先像真人一样随意浏览一会儿列表，再开始点
-                            for _ in range(random.randint(2, 4)):
-                                try:
-                                    list_page.mouse.wheel(0, random.randint(300, 900))
-                                    list_page.wait_for_timeout(random.randint(1500, 3000))
-                                except Exception:
-                                    pass
-                            for r in items:
-                                iid = r["item_id"]
-                                print(f"  -> 详情 {processed + 1}/{len(pending)}：{iid}")
-                                detail = click_and_extract(
-                                    ctx, list_page, iid, save_html=task.save_html
-                                )
-
-                                # 价格护栏：详情价缺失或与列表价偏差过大时，回退列表价
-                                price_final = detail["price_final"]
-                                list_price = parse_price(r.get("price_text") or "")
-                                if list_price is not None:
-                                    if price_final is None or price_final < list_price * 0.3 or price_final > list_price * 3:
-                                        print(
-                                            f"    [价格修正] 详情价 {price_final} 与列表价 {list_price} 偏差过大，回退列表价"
-                                        )
-                                        price_final = list_price
-
-                                html = detail.pop("_html", None)
-                                if html:
-                                    (raw_dir / f"{iid}.html").write_text(html, encoding="utf-8")
-                                (raw_dir / f"{iid}.json").write_text(
-                                    json.dumps(detail, ensure_ascii=False, indent=2),
-                                    encoding="utf-8",
-                                )
-
-                                db.upsert_product(conn, {
-                                    "item_id": iid,
-                                    "title": detail["title"] or r.get("title") or "",
-                                    "shop_name": detail["shop_name"] or r.get("shop_name"),
-                                    "shop_rating": detail["shop_rating"],
-                                    "positive_rate": detail["positive_rate"],
-                                    "sku_names": json.dumps(detail["sku_names"], ensure_ascii=False),
-                                    "params_json": json.dumps(detail["params"], ensure_ascii=False),
-                                    "image_url": detail["image_url"] or r.get("image_url"),
-                                    "video_url": detail["video_url"],
-                                    "product_url": detail["product_url"],
-                                    "updated_at": datetime.now().isoformat(timespec="seconds"),
-                                    "first_seen_at": datetime.now().isoformat(timespec="seconds"),
-                                })
-                                db.set_snapshot_detail(conn, task.task_id, iid, batch, price_final)
-                                processed += 1
-                                db.set_batch(conn, batch, task.task_id, stage="detail",
-                                             detail_done=done_count + processed)
-
-                                # 拟人节奏：单个 20–40s；每 2 个额外休息 90–180s
-                                pause = random.uniform(20.0, 40.0)
-                                if processed % 2 == 0:
-                                    pause += random.uniform(90.0, 180.0)
-                                    print(f"  （休息 {pause:.0f} 秒，模拟正常浏览节奏）")
-                                time.sleep(pause)
-                        finally:
-                            try:
-                                list_page.close()
-                            except Exception:
-                                pass
+                    if provider == "apify":
+                        print(f"[{task.task_id}] 详情通道：Apify（本地不访问详情页）")
+                        _enrich_with_apify(conn, task, batch, pending, raw_dir)
+                    else:
+                        _collect_details_by_click(
+                            conn, ctx, task, batch, pending, done_count, raw_dir
+                        )
 
                 db.set_batch(
                     conn, batch, task.task_id,
@@ -190,7 +269,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                 )
                 print(f"[{task.task_id}] 批次 {batch} 完成 ✅（详情 {len(pending)} 个）")
             finally:
-                ctx.close()
+                close_context(ctx)
     except EmptyResultError as e:
         db.set_batch(conn, batch, task.task_id, status="failed", error=str(e))
         print(f"\n[{task.task_id}] 采集失败：{e}")
@@ -206,3 +285,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
         print("处理完成后执行：")
         print(f"  python -m bkr.cli collect --task {task.task_id} --batch {batch} --resume")
         raise SystemExit(2)
+    except RuntimeError as e:
+        db.set_batch(conn, batch, task.task_id, status="failed", error=str(e))
+        print(f"\n[{task.task_id}] 采集失败：{e}")
+        raise SystemExit(1)

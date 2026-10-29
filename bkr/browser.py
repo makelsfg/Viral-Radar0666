@@ -1,13 +1,24 @@
-"""Playwright 浏览器启动、登录态与风控检测。
+"""Playwright 浏览器启动、登录态、风控检测与引擎选择。
 
-playwright 采用惰性导入：只跑模拟数据/单测时无需安装浏览器。
+引擎优先级（BK_ENGINE 可强制）：
+  auto（默认）→ patchright → rebrowser-playwright → 原版 playwright
+  patchright / rebrowser 是带反检测补丁的 Playwright 分支（修复 CDP Runtime.enable、
+  UtilityScript 调用栈等泄漏），未安装时自动回落到原版，不影响现有使用。
+
+CDP 模式（BK_CDP_URL，例如 http://127.0.0.1:9222）：接管你手动启动的真实 Chrome，
+不使用自动化启动参数；此模式下不会关闭用户浏览器。
 """
 from __future__ import annotations
 
+import importlib.util
+import os
 import random
 import time
+from contextlib import contextmanager
 
 from .config import PROFILE_DIR, STATE_PATH
+
+CDP_URL = (os.environ.get("BK_CDP_URL") or "").strip()
 
 
 class BlockedError(RuntimeError):
@@ -22,8 +33,61 @@ class EmptyResultError(RuntimeError):
     """页面解析到 0 个商品：登录失效 / 风控 / 页面结构改版。"""
 
 
+def engine_name() -> str:
+    """解析实际使用的引擎（patchright / rebrowser / playwright）。"""
+    pref = (os.environ.get("BK_ENGINE") or "auto").strip().lower()
+    has_patchright = importlib.util.find_spec("patchright") is not None
+    has_rebrowser = importlib.util.find_spec("rebrowser_playwright") is not None
+    if pref == "playwright":
+        return "playwright"
+    if pref == "patchright":
+        return "patchright" if has_patchright else "playwright"
+    if pref == "rebrowser":
+        return "rebrowser" if has_rebrowser else "playwright"
+    if has_patchright:
+        return "patchright"
+    if has_rebrowser:
+        return "rebrowser"
+    return "playwright"
+
+
+def playwright_engine():
+    name = engine_name()
+    try:
+        if name == "patchright":
+            from patchright.sync_api import sync_playwright
+
+            return sync_playwright
+        if name == "rebrowser":
+            from rebrowser_playwright.sync_api import sync_playwright
+
+            return sync_playwright
+    except ImportError as exc:  # 包存在但导入失败时回落
+        print(f"[engine] {name} 导入失败，回退 playwright：{exc}")
+    from playwright.sync_api import sync_playwright
+
+    return sync_playwright
+
+
+@contextmanager
+def browser_runtime():
+    """统一入口：with browser_runtime() as p: ..."""
+    fn = playwright_engine()
+    with fn() as p:
+        yield p
+
+
 def launch_context(p, headless: bool = False):
-    """启动带持久化用户目录的 Chromium（登录态、指纹、cookie 都留在本机）。"""
+    """返回 BrowserContext。CDP 模式接管真实 Chrome，否则启动持久化 profile。"""
+    if CDP_URL:
+        browser = p.chromium.connect_over_cdp(CDP_URL)
+        ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+        try:
+            ctx._bkr_owned = False  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        return ctx
+
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     ctx = p.chromium.launch_persistent_context(
         user_data_dir=str(PROFILE_DIR),
@@ -33,7 +97,11 @@ def launch_context(p, headless: bool = False):
         timezone_id="Asia/Shanghai",
         args=["--disable-blink-features=AutomationControlled"],
     )
-    # 轻量反自动化特征：navigator.webdriver / chrome 对象 / languages / plugins
+    try:
+        ctx._bkr_owned = True  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    # 轻量反自动化特征（patchright/rebrowser 会在引擎层做更彻底的修复）
     try:
         ctx.add_init_script(
             """
@@ -46,6 +114,18 @@ def launch_context(p, headless: bool = False):
     except Exception:
         pass
     return ctx
+
+
+def close_context(ctx) -> None:
+    """只关闭自己启动的浏览器；CDP 模式下保持用户浏览器不动。"""
+    if CDP_URL:
+        return
+    if not getattr(ctx, "_bkr_owned", True):
+        return
+    try:
+        ctx.close()
+    except Exception:
+        pass
 
 
 _BLOCK_MARKERS = (
@@ -62,7 +142,7 @@ _LOGIN_MARKERS = ("亲，请登录", "扫码登录", "密码登录")
 
 
 def check_blocked(page) -> None:
-    """检测登录失效 / 滑块验证，命中即抛异常（由上层暂停批次）。"""
+    """检测登录失效 / 滑块验证 / 访问异常，命中即抛异常（由上层暂停批次）。"""
     url = (page.url or "").lower()
     if "login.taobao.com" in url or "login.tmall.com" in url:
         raise LoginError("登录态已失效：请重新运行 bkr login，然后执行 --resume 续采")
@@ -114,38 +194,43 @@ def human_move(page, x: float, y: float) -> None:
 
 def login() -> None:
     """打开浏览器人工扫码登录。登录态保存在持久化 profile 中，快照仅作备份。"""
-    from playwright.sync_api import sync_playwright
-
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    print(f"当前浏览器 profile：{PROFILE_DIR}")
-    with sync_playwright() as p:
+    if CDP_URL:
+        print(f"CDP 模式：接管 {CDP_URL} 上的 Chrome（请确保已在该浏览器登录淘宝）")
+    else:
+        print(f"当前浏览器 profile：{PROFILE_DIR}")
+    print(f"当前引擎：{engine_name()}")
+
+    with browser_runtime() as p:
         ctx = launch_context(p)
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto("https://www.taobao.com", wait_until="domcontentloaded")
-        print("请在弹出的浏览器窗口里完成登录（扫码即可）。")
-        print("⚠️ 登录完成后【不要关闭浏览器窗口】，直接回到终端按回车。")
-        input()
-
-        logged_in = False
+        page = ctx.new_page()
         try:
-            cookies = ctx.cookies()
-            logged_in = any(
-                c.get("name") in ("cookie2", "_tb_token_", "sgcookie") for c in cookies
-            )
-            print(f"检测到浏览器 cookie {len(cookies)} 个")
-        except Exception:
-            print("浏览器窗口在回车前已关闭；登录态可能已写入本地 profile（.browser-profile/）")
+            page.goto("https://www.taobao.com", wait_until="domcontentloaded")
+            print("请在弹出的浏览器窗口里完成登录（扫码即可）。")
+            print("⚠️ 登录完成后【不要关闭浏览器窗口】，直接回到终端按回车。")
+            input()
 
-        try:
-            ctx.storage_state(path=str(STATE_PATH))
-            print(f"登录态快照已保存：{STATE_PATH}")
-        except Exception:
-            print("未能导出登录快照（浏览器已关闭）；登录态仍以本地 profile 为准")
+            logged_in = False
+            try:
+                cookies = ctx.cookies()
+                logged_in = any(
+                    c.get("name") in ("cookie2", "_tb_token_", "sgcookie") for c in cookies
+                )
+                print(f"检测到浏览器 cookie {len(cookies)} 个")
+            except Exception:
+                print("浏览器窗口在回车前已关闭；登录态可能已写入本地 profile")
 
-        try:
-            ctx.close()
-        except Exception:
-            pass
+            try:
+                ctx.storage_state(path=str(STATE_PATH))
+                print(f"登录态快照已保存：{STATE_PATH}")
+            except Exception:
+                print("未能导出登录快照（浏览器已关闭）；登录态仍以本地 profile 为准")
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+            close_context(ctx)
 
     if logged_in:
         print("登录完成。下一步：python -m bkr.cli collect --task kids-bottle")

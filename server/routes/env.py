@@ -8,6 +8,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 
 from bkr import __version__
+from bkr.browser import CDP_URL, engine_name
 from bkr.config import PROFILE_DIR
 
 from ..jobs import BusyError, manager
@@ -18,10 +19,13 @@ _STARTED_AT = datetime.now().isoformat(timespec="seconds")
 
 @router.get("/health")
 def health():
-    """版本探针：用于确认当前 8765 端口上跑的是不是最新后端。"""
+    """版本探针：确认 8765 端口上跑的是不是最新后端，以及当前引擎/通道。"""
     return {
         "version": __version__,
         "profile": PROFILE_DIR.name,
+        "engine": engine_name(),
+        "cdp": bool(CDP_URL),
+        "detail_provider": os.environ.get("BK_DETAIL_PROVIDER", "local"),
         "started_at": _STARTED_AT,
         "pid": os.getpid(),
     }

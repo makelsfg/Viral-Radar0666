@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v0.5.2（采集 + 分析 + 保守模式/热词） |
+| 文档版本 | v0.5.3（采集 + 分析 + 反检测引擎/详情通道） |
 | 日期 | 2026-10-29 |
 | 作者 / 唯一开发者 | kiro666 |
 | 平台范围 | 仅天猫店铺商品（s.taobao.com 天猫 tab；detail.tmall.com） |
@@ -16,6 +16,8 @@
 > v0.5.1 修复（2026-10-29 代码审查）：口径统一（默认 1 页/6 详情，CLI 配置同步）；导出范围跟随"只看已采详情"开关（CLI 增加 `--only-detail`）；依赖拆分（requests / pytest / legacy UI）；分析按品类画像（水具/服饰/手表/默认），价格带改固定区间；分析标注详情价/列表价样本；批次保存采集配置快照（`batch_run.config_json`）。
 >
 > v0.5.2（2026-10-29）：新增**保守模式**（默认开启：只采列表、不访问详情页，服务端强制 pages=1/detail_top=0）与**热词**页签（淘宝搜索联想词，落库回看）。
+>
+> v0.5.3（2026-10-29）：新增**反检测引擎开关**（patchright / rebrowser-playwright，自动检测与回落）、**CDP 接管真实 Chrome**（browser.cdp_url）、**详情通道可插拔**（detail.provider=local/apify，Apify 补详情时本地不访问详情页）；/api/health 暴露 engine/cdp/provider。
 
 ---
 

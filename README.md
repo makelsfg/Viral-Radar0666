@@ -148,6 +148,36 @@ $env:BK_PROFILE="alt"
 
 注意：同一台机器、同一个 IP 下，换号并不能绕过平台的风控关联；换号的价值是把风险隔离到备用号上，冷却期和低频采集仍然要遵守。新号登录后先正常浏览 2–3 天再开始采集，触发概率会低很多。
 
+## 详情通道与反检测引擎
+
+**详情通道（detail.provider）**
+
+- `local`（默认）：在搜索结果页点击进入详情，本地采集（受风控影响）。
+- `apify`：列表仍本地采；详情字段改由 Apify 托管采集补全，**本地不访问详情页**。需要在 `config/settings.yaml` 配置 `apify.token`（参考费用：全详情约 $0.004/条，6 条/天≈$0.7/月）。
+
+**反检测引擎（browser.engine）**
+
+- `auto`（默认）：检测到 `patchright` 或 `rebrowser-playwright` 就用，否则回落原版 Playwright。
+- 安装可选引擎：`pip install -r requirements-stealth.txt`（patchright）或 `pip install rebrowser-playwright`，然后执行一次 `patchright install chromium`（或复用已装浏览器）。
+- 可强制指定：`engine: "patchright"` / `"rebrowser"` / `"playwright"`。
+
+**CDP 接管模式（browser.cdp_url）**
+
+先用真实 Chrome 启动调试端口并登录，再启动本服务：
+
+```powershell
+Start-Process chrome -ArgumentList '--remote-debugging-port=9222', "--user-data-dir=D:\chrome-debug-profile"
+```
+
+```yaml
+browser:
+  cdp_url: "http://127.0.0.1:9222"
+```
+
+此模式复用你自己的浏览器（不使用自动化启动参数），结束后不会关闭你的 Chrome。
+
+`/api/health` 会显示当前 `engine` / `cdp` / `detail_provider`，方便确认配置是否生效。
+
 ## 常见问题
 
 - **页面出现"访问异常提示"**：账号或 IP 被天猫风控标记。立即停止采集，**冷却 24–48 小时**（期间不要用脚本反复重试），用同一浏览器手动打开详情页确认恢复后再以更低强度继续：每天 1 批、1–2 页、5–10 个详情、间隔加大。长期方案见"合规"：网页采集只做低频，详情数据可补充淘宝客 API/第三方数据做对照。

@@ -1,0 +1,6 @@
+# 可选：反检测 Playwright 引擎（二选一即可，engine: auto 会自动检测）
+# 推荐 patchright；也可改用 rebrowser-playwright：
+#   pip install rebrowser-playwright
+# 安装后执行一次浏览器安装（复用 Playwright 的浏览器缓存）：
+#   patchright install chromium
+patchright

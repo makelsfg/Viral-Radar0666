@@ -40,6 +40,24 @@ def _apply_settings_to_env(settings: dict) -> None:
     if profile:
         os.environ.setdefault("BK_PROFILE", profile)
 
+    browser = settings.get("browser") or {}
+    if isinstance(browser, dict):
+        if browser.get("engine"):
+            os.environ.setdefault("BK_ENGINE", str(browser["engine"]).strip())
+        if browser.get("cdp_url"):
+            os.environ.setdefault("BK_CDP_URL", str(browser["cdp_url"]).strip())
+
+    detail = settings.get("detail") or {}
+    if isinstance(detail, dict) and detail.get("provider"):
+        os.environ.setdefault("BK_DETAIL_PROVIDER", str(detail["provider"]).strip())
+
+    apify = settings.get("apify") or {}
+    if isinstance(apify, dict):
+        if apify.get("token"):
+            os.environ.setdefault("BK_APIFY_TOKEN", str(apify["token"]).strip())
+        if apify.get("actor"):
+            os.environ.setdefault("BK_APIFY_ACTOR", str(apify["actor"]).strip())
+
 
 _apply_settings_to_env(_load_settings())
 
