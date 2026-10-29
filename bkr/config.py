@@ -44,6 +44,8 @@ def _apply_settings_to_env(settings: dict) -> None:
     if isinstance(browser, dict):
         if browser.get("engine"):
             os.environ.setdefault("BK_ENGINE", str(browser["engine"]).strip())
+        if browser.get("channel"):
+            os.environ.setdefault("BK_BROWSER_CHANNEL", str(browser["channel"]).strip())
         if browser.get("cdp_url"):
             os.environ.setdefault("BK_CDP_URL", str(browser["cdp_url"]).strip())
 
@@ -66,7 +68,12 @@ RAW_DIR = DATA_DIR / "raw"
 DB_PATH = Path(os.environ.get("BK_DB", DATA_DIR / "radar.db"))
 TASKS_DIR = ROOT / "config" / "tasks"
 _PROFILE = os.environ.get("BK_PROFILE", "").strip()
-PROFILE_DIR = ROOT / (".browser-profile" if not _PROFILE else f".browser-profile-{_PROFILE}")
+_CHANNEL = os.environ.get("BK_BROWSER_CHANNEL", "").strip()
+_profile_name = ".browser-profile" if not _PROFILE else f".browser-profile-{_PROFILE}"
+if _CHANNEL:
+    # 不同浏览器内核使用独立 profile，避免 Chromium/Edge 混用同一个用户目录
+    _profile_name += f"-{_CHANNEL}"
+PROFILE_DIR = ROOT / _profile_name
 SECRETS_DIR = ROOT / ".secrets"
 STATE_PATH = SECRETS_DIR / "state.json"
 

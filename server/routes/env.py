@@ -8,7 +8,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 
 from bkr import __version__
-from bkr.browser import CDP_URL, engine_name
+from bkr.browser import CDP_URL, browser_channel, engine_name
 from bkr.config import PROFILE_DIR
 
 from ..jobs import BusyError, manager
@@ -24,6 +24,7 @@ def health():
         "version": __version__,
         "profile": PROFILE_DIR.name,
         "engine": engine_name(),
+        "channel": browser_channel(),
         "cdp": bool(CDP_URL),
         "detail_provider": os.environ.get("BK_DETAIL_PROVIDER", "local"),
         "started_at": _STARTED_AT,

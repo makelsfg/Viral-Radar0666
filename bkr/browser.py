@@ -19,6 +19,11 @@ from contextlib import contextmanager
 from .config import PROFILE_DIR, STATE_PATH
 
 CDP_URL = (os.environ.get("BK_CDP_URL") or "").strip()
+CHANNEL = (os.environ.get("BK_BROWSER_CHANNEL") or "").strip()
+
+
+def browser_channel() -> str:
+    return CHANNEL or "chromium"
 
 
 class BlockedError(RuntimeError):
@@ -89,7 +94,7 @@ def launch_context(p, headless: bool = False):
         return ctx
 
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    ctx = p.chromium.launch_persistent_context(
+    launch_kwargs = dict(
         user_data_dir=str(PROFILE_DIR),
         headless=headless,
         viewport={"width": 1500, "height": 950},
@@ -97,6 +102,15 @@ def launch_context(p, headless: bool = False):
         timezone_id="Asia/Shanghai",
         args=["--disable-blink-features=AutomationControlled"],
     )
+    ctx = None
+    if CHANNEL:
+        try:
+            ctx = p.chromium.launch_persistent_context(channel=CHANNEL, **launch_kwargs)
+            print(f"[browser] 使用 {CHANNEL}（{(PROFILE_DIR).name}）")
+        except Exception as exc:  # 指定浏览器不可用时回落内置 Chromium
+            print(f"[browser] {CHANNEL} 启动失败（{exc}），回退内置 Chromium")
+    if ctx is None:
+        ctx = p.chromium.launch_persistent_context(**launch_kwargs)
     try:
         ctx._bkr_owned = True  # type: ignore[attr-defined]
     except Exception:
@@ -199,7 +213,7 @@ def login() -> None:
         print(f"CDP 模式：接管 {CDP_URL} 上的 Chrome（请确保已在该浏览器登录淘宝）")
     else:
         print(f"当前浏览器 profile：{PROFILE_DIR}")
-    print(f"当前引擎：{engine_name()}")
+    print(f"当前引擎：{engine_name()}    浏览器：{browser_channel()}")
 
     with browser_runtime() as p:
         ctx = launch_context(p)

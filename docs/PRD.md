@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v0.5.3（采集 + 分析 + 反检测引擎/详情通道） |
+| 文档版本 | v0.5.4（采集 + 分析 + 浏览器/引擎/详情通道） |
 | 日期 | 2026-10-29 |
 | 作者 / 唯一开发者 | kiro666 |
 | 平台范围 | 仅天猫店铺商品（s.taobao.com 天猫 tab；detail.tmall.com） |
@@ -18,6 +18,8 @@
 > v0.5.2（2026-10-29）：新增**保守模式**（默认开启：只采列表、不访问详情页，服务端强制 pages=1/detail_top=0）与**热词**页签（淘宝搜索联想词，落库回看）。
 >
 > v0.5.3（2026-10-29）：新增**反检测引擎开关**（patchright / rebrowser-playwright，自动检测与回落）、**CDP 接管真实 Chrome**（browser.cdp_url）、**详情通道可插拔**（detail.provider=local/apify，Apify 补详情时本地不访问详情页）；/api/health 暴露 engine/cdp/provider。
+>
+> v0.5.4（2026-10-29）：新增**浏览器选择**（browser.channel：msedge/chrome/内置 Chromium，默认 msedge；按浏览器隔离 profile，切换需重新登录）；health 增加 channel。
 
 ---
 

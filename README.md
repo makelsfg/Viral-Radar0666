@@ -155,6 +155,12 @@ $env:BK_PROFILE="alt"
 - `local`（默认）：在搜索结果页点击进入详情，本地采集（受风控影响）。
 - `apify`：列表仍本地采；详情字段改由 Apify 托管采集补全，**本地不访问详情页**。需要在 `config/settings.yaml` 配置 `apify.token`（参考费用：全详情约 $0.004/条，6 条/天≈$0.7/月）。
 
+**浏览器选择（browser.channel）**
+
+- `msedge`（默认）：用本机 Microsoft Edge；`chrome`：本机 Chrome；留空：内置 Chromium
+- 切换浏览器会使用独立 profile（如 `.browser-profile-msedge`），**需要重新扫码登录一次**；旧的 Chromium 登录态不受影响
+- 指定浏览器不可用时会自动回退内置 Chromium（控制台有提示）
+
 **反检测引擎（browser.engine）**
 
 - `auto`（默认）：检测到 `patchright` 或 `rebrowser-playwright` 就用，否则回落原版 Playwright。
