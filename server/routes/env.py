@@ -8,7 +8,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 
 from bkr import __version__
-from bkr.browser import CDP_URL, browser_channel, engine_name
+from bkr.browser import CDP_URL, browser_channel, engine_name, has_login_cookies
 from bkr.config import PROFILE_DIR
 
 from ..jobs import BusyError, manager
@@ -53,7 +53,7 @@ def is_logged_in() -> bool:
             }
         finally:
             conn.close()
-        return bool({"unb", "tracknick"} & names)
+        return has_login_cookies(names)
     except sqlite3.Error:
         return False
 

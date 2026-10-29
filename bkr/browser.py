@@ -38,6 +38,14 @@ class EmptyResultError(RuntimeError):
     """页面解析到 0 个商品：登录失效 / 风控 / 页面结构改版。"""
 
 
+LOGIN_COOKIE_NAMES = {"cookie2", "unb"}
+
+
+def has_login_cookies(names) -> bool:
+    """淘宝登录态判定：必须同时具备 cookie2 与 unb（只有 tracknick 是半登录）。"""
+    return LOGIN_COOKIE_NAMES.issubset(set(names))
+
+
 def engine_name() -> str:
     """解析实际使用的引擎（patchright / rebrowser / playwright）。"""
     pref = (os.environ.get("BK_ENGINE") or "auto").strip().lower()
@@ -230,14 +238,17 @@ def login() -> None:
 
             logged_in = False
             try:
-                cookies = ctx.cookies()
-                logged_in = any(
-                    c.get("name") in ("cookie2", "_tb_token_", "sgcookie") for c in cookies
-                )
-                print(f"检测到浏览器 cookie {len(cookies)} 个")
+                cookie_names = {c.get("name") for c in ctx.cookies()}
+                logged_in = has_login_cookies(cookie_names)
+                print(f"检测到浏览器 cookie {len(cookie_names)} 个")
+                if not logged_in and "tracknick" in cookie_names:
+                    print("检测到 tracknick 但缺少 cookie2/unb（半登录），请完成扫码后的全部确认步骤")
             except Exception:
                 print("浏览器窗口在回车前已关闭；登录态可能已写入本地 profile")
 
+            if logged_in:
+                # 等 cookie 落盘稳定后再关闭，避免半登录
+                time.sleep(2)  # noqa: F821  (time 已在模块顶部导入)
             try:
                 ctx.storage_state(path=str(STATE_PATH))
                 print(f"登录态快照已保存：{STATE_PATH}")

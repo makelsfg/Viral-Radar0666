@@ -40,6 +40,7 @@ export default function CollectPanel() {
   const [form] = Form.useForm()
   const [job, setJob] = useState<JobState | null>(null)
   const [conservative, setConservative] = useState(true)
+  const [loginRunning, setLoginRunning] = useState(false)
   const jobRef = useRef<string | null>(null)
 
   const applyJob = (j: JobState) => {
@@ -100,6 +101,20 @@ export default function CollectPanel() {
       message.error(e.message || '续采失败')
     }
   }
+
+  const openLogin = async () => {
+    setLoginRunning(true)
+    try {
+      await api.login()
+      message.info('浏览器已打开，请完成扫码登录，然后点「继续采集」')
+    } catch (e: any) {
+      message.error(e.message || '打开登录失败')
+    } finally {
+      setLoginRunning(false)
+    }
+  }
+
+  const needLogin = !!job?.error && job.error.includes('登录')
 
   const pagesPercent = job
     ? Math.min(100, Math.round((job.page_done / Math.max(job.pages, 1)) * 100))
@@ -216,12 +231,23 @@ export default function CollectPanel() {
               type="warning"
               showIcon
               style={{ marginTop: 12 }}
-              message="需要人工处理"
-              description="到弹出的浏览器里完成滑块验证（或重新登录），然后点「继续采集」。"
+              message={needLogin ? '需要重新登录' : '需要人工处理'}
+              description={
+                needLogin
+                  ? '当前登录态不完整（需 cookie2 + unb）。点「打开登录」完成扫码，再点「继续采集」。'
+                  : '到弹出的浏览器里完成滑块验证（或重新登录），然后点「继续采集」。'
+              }
               action={
-                <Button size="small" icon={<ReloadOutlined />} onClick={resume}>
-                  继续采集
-                </Button>
+                <Space>
+                  {needLogin && (
+                    <Button size="small" loading={loginRunning} onClick={openLogin}>
+                      打开登录
+                    </Button>
+                  )}
+                  <Button size="small" icon={<ReloadOutlined />} onClick={resume}>
+                    继续采集
+                  </Button>
+                </Space>
               }
             />
           )}

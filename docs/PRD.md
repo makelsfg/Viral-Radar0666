@@ -20,6 +20,8 @@
 > v0.5.3（2026-10-29）：新增**反检测引擎开关**（patchright / rebrowser-playwright，自动检测与回落）、**CDP 接管真实 Chrome**（browser.cdp_url）、**详情通道可插拔**（detail.provider=local/apify，Apify 补详情时本地不访问详情页）；/api/health 暴露 engine/cdp/provider。
 >
 > v0.5.4（2026-10-29）：新增**浏览器选择**（browser.channel：msedge/chrome/内置 Chromium，默认 msedge；按浏览器隔离 profile，切换需重新登录）；health 增加 channel。
+>
+> v0.5.5（2026-10-29）：登录态判定改为严格模式（必须 `cookie2 + unb`，修复"半登录"被误判为已登录、登录任务提前关闭浏览器的问题）；暂停提示增加「打开登录」入口。
 
 ---
 

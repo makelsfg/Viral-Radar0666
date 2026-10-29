@@ -200,22 +200,33 @@ class JobManager:
                     page.goto("https://www.taobao.com", wait_until="domcontentloaded")
                     deadline = time.time() + 300
                     logged = False
+                    hits = 0
                     while time.time() < deadline:
                         try:
                             names = {c.get("name") for c in ctx.cookies()}
                         except Exception:
                             break
-                        if {"unb", "tracknick"} & names:
-                            logged = True
-                            break
+                        from bkr.browser import has_login_cookies
+
+                        if has_login_cookies(names):
+                            hits += 1
+                            if hits >= 2:  # 连续两次确认，避免半登录
+                                logged = True
+                                break
+                        else:
+                            hits = 0
                         time.sleep(2)
                     if logged:
+                        time.sleep(2)  # 等 cookie 落盘
                         try:
                             ctx.storage_state(path=str(STATE_PATH))
                         except Exception:
                             pass
-                    job["status"] = "done" if logged else "timeout"
-                    job["message"] = "登录成功" if logged else "5 分钟内未检测到登录，请重试"
+                        job["status"] = "done"
+                        job["message"] = "登录成功"
+                    else:
+                        job["status"] = "timeout"
+                        job["message"] = "5 分钟内未检测到完整登录（需 cookie2 + unb），请重试"
                 finally:
                     try:
                         page.close()

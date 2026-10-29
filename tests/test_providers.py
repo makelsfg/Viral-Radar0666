@@ -1,6 +1,6 @@
 """引擎选择、CDP 关闭保护、Apify 映射与价格护栏单测（不访问网络）。"""
 import bkr.browser as browser_mod
-from bkr.browser import close_context, engine_name
+from bkr.browser import close_context, engine_name, has_login_cookies
 from bkr.collector import _price_guard
 from bkr.providers.apify_tmall import map_to_product
 
@@ -50,6 +50,13 @@ def test_price_guard():
 
 def test_engine_name_is_known():
     assert engine_name() in ("playwright", "patchright", "rebrowser")
+
+
+def test_login_cookies_strict():
+    # 只有 tracknick/sgcookie 属于半登录，必须 cookie2 + unb 才算完整
+    assert not has_login_cookies({"tracknick", "sgcookie", "lgc"})
+    assert not has_login_cookies({"cookie2"})
+    assert has_login_cookies({"cookie2", "unb", "tracknick"})
 
 
 class _DummyCtx:
