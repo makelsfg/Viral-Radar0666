@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from .config import DB_PATH
@@ -75,6 +76,15 @@ CREATE TABLE IF NOT EXISTS batch_run (
   started_at   TEXT,
   finished_at  TEXT,
   PRIMARY KEY (batch, task_id)
+);
+
+CREATE TABLE IF NOT EXISTS hot_word (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  keyword    TEXT NOT NULL,
+  word       TEXT NOT NULL,
+  rank       INTEGER,
+  created_at TEXT NOT NULL,
+  UNIQUE (keyword, word)
 );
 """
 
@@ -270,3 +280,38 @@ def reset_batch_progress(conn, batch: str, task_id: str) -> None:
         (batch, task_id),
     )
     conn.commit()
+
+
+def save_hotwords(conn, keyword: str, words: list[str]) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    for rank, word in enumerate(words, 1):
+        conn.execute(
+            """INSERT INTO hot_word(keyword, word, rank, created_at)
+               VALUES(?,?,?,?)
+               ON CONFLICT(keyword, word) DO UPDATE SET
+                 rank=excluded.rank, created_at=excluded.created_at""",
+            (keyword, word, rank, now),
+        )
+    conn.commit()
+
+
+def list_hotwords(conn, keyword: str | None = None, limit: int = 50) -> list[dict]:
+    if keyword:
+        rows = conn.execute(
+            "SELECT * FROM hot_word WHERE keyword=? ORDER BY rank ASC LIMIT ?",
+            (keyword, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM hot_word ORDER BY created_at DESC, rank ASC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def hotword_keywords(conn) -> list[dict]:
+    rows = conn.execute(
+        """SELECT keyword, MAX(created_at) AS last_at, COUNT(*) AS count
+           FROM hot_word GROUP BY keyword ORDER BY last_at DESC"""
+    ).fetchall()
+    return [dict(r) for r in rows]

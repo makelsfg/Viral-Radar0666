@@ -68,6 +68,20 @@ export interface SseEvent {
   job: JobState
 }
 
+export interface HotwordKeyword {
+  keyword: string
+  last_at: string
+  count: number
+}
+
+export interface HotwordRow {
+  id: number
+  keyword: string
+  word: string
+  rank: number
+  created_at: string
+}
+
 export interface AnalysisBand {
   label: string
   count: number

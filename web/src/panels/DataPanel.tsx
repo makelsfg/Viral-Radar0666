@@ -272,6 +272,13 @@ export default function DataPanel() {
           showIcon
           message="当前批次还没有采到详情"
           description="可以切换批次，或关掉「只看已采详情」查看候选商品。"
+          action={
+            onlyDetail ? (
+              <Button size="small" onClick={() => setOnlyDetail(false)}>
+                显示候选商品
+              </Button>
+            ) : undefined
+          }
         />
       )}
 

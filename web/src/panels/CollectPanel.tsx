@@ -10,6 +10,7 @@ import {
   Progress,
   Select,
   Space,
+  Switch,
   Tag,
 } from 'antd'
 import { PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
@@ -38,6 +39,7 @@ export default function CollectPanel() {
   const { message } = AntApp.useApp()
   const [form] = Form.useForm()
   const [job, setJob] = useState<JobState | null>(null)
+  const [conservative, setConservative] = useState(true)
   const jobRef = useRef<string | null>(null)
 
   const applyJob = (j: JobState) => {
@@ -69,8 +71,9 @@ export default function CollectPanel() {
       const created = await api.collect({
         keyword: values.keyword,
         pages: values.pages ?? 1,
-        detail_top: values.detail_top ?? 6,
+        detail_top: values.detail_top ?? 0,
         detail_order: values.detail_order ?? 'rank',
+        mode: conservative ? 'conservative' : 'standard',
         price_min: values.price_min ?? null,
         price_max: values.price_max ?? null,
         exclude_words: String(values.exclude_words || '')
@@ -111,12 +114,27 @@ export default function CollectPanel() {
 
   return (
     <>
-      <Card title="开始采集" style={{ marginBottom: 16 }}>
+      <Card
+        title="开始采集"
+        style={{ marginBottom: 16 }}
+        extra={
+          <Space>
+            <Switch
+              checked={conservative}
+              onChange={(v) => {
+                setConservative(v)
+                form.setFieldsValue({ pages: 1, detail_top: v ? 0 : 6 })
+              }}
+            />
+            <span>保守模式（只采列表，不进详情）</span>
+          </Space>
+        }
+      >
         <Form
           form={form}
           layout="inline"
           onFinish={start}
-          initialValues={{ pages: 1, detail_top: 6, detail_order: 'rank' }}
+          initialValues={{ pages: 1, detail_top: 0, detail_order: 'rank' }}
           style={{ rowGap: 12 }}
         >
           <Form.Item
@@ -127,10 +145,10 @@ export default function CollectPanel() {
             <Input placeholder="例如：儿童保温杯" style={{ width: 220 }} allowClear />
           </Form.Item>
           <Form.Item name="pages" label="搜索页数">
-            <InputNumber min={1} max={10} />
+            <InputNumber min={1} max={10} disabled={conservative} />
           </Form.Item>
           <Form.Item name="detail_top" label="详情样本数">
-            <InputNumber min={0} max={200} />
+            <InputNumber min={0} max={200} disabled={conservative} />
           </Form.Item>
           <Form.Item name="detail_order" label="详情顺序">
             <Select
@@ -159,6 +177,15 @@ export default function CollectPanel() {
         <div className="hint">
           每页约 40–60 个商品；详情样本数 = 进入详情页采集的头部商品数（越多越慢、风控压力越大）。
         </div>
+        {conservative && (
+          <Alert
+            type="success"
+            showIcon
+            style={{ marginTop: 12 }}
+            message="保守模式：不访问商品详情页，风控最低"
+            description="只采集搜索结果列表（标题、主图、价格、已售、店铺），不采 SKU/参数/评分；到「数据」页关掉「只看已采详情」即可查看候选商品。"
+          />
+        )}
       </Card>
 
       {job && (

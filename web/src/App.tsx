@@ -3,12 +3,14 @@ import { App as AntApp, Button, Layout, Space, Tabs, Tag } from 'antd'
 import {
   BarChartOutlined,
   ExperimentOutlined,
+  FireOutlined,
   TableOutlined,
   UserOutlined,
 } from '@ant-design/icons'
 import AnalysisPanel from './panels/AnalysisPanel'
 import CollectPanel from './panels/CollectPanel'
 import DataPanel from './panels/DataPanel'
+import HotwordsPanel from './panels/HotwordsPanel'
 import { api } from './api'
 import { useSse } from './sse'
 
@@ -108,6 +110,15 @@ export default function App() {
                 </span>
               ),
               children: <AnalysisPanel />,
+            },
+            {
+              key: 'hotwords',
+              label: (
+                <span>
+                  <FireOutlined /> 热词
+                </span>
+              ),
+              children: <HotwordsPanel />,
             },
           ]}
         />

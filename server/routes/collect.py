@@ -21,6 +21,7 @@ class CollectRequest(BaseModel):
     pages: int = Field(default=1, ge=1, le=10)
     detail_top: int = Field(default=6, ge=0, le=200)
     detail_order: str = Field(default="rank", pattern="^(rank|sold)$")
+    mode: str = Field(default="standard", pattern="^(standard|conservative)$")
     price_min: float | None = Field(default=None, ge=0)
     price_max: float | None = Field(default=None, ge=0)
     exclude_words: list[str] = Field(default_factory=list)
@@ -72,8 +73,8 @@ def collect(req: CollectRequest):
         task_id=_task_id_for(keyword),
         name=keyword,
         keywords=[keyword],
-        pages=req.pages,
-        detail_top=req.detail_top,
+        pages=1 if req.mode == "conservative" else req.pages,
+        detail_top=0 if req.mode == "conservative" else req.detail_top,
         detail_order=req.detail_order,
         price_min=req.price_min,
         price_max=req.price_max,

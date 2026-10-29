@@ -1,5 +1,7 @@
 import type {
   AnalysisSummary,
+  HotwordKeyword,
+  HotwordRow,
   JobState,
   ProductDetail,
   ProductRow,
@@ -61,4 +63,15 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task_id: taskId, batch }),
     }),
+  fetchHotwords: (keyword: string) =>
+    request<{ keyword: string; words: string[] }>('/api/hotwords', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keyword }),
+    }),
+  hotwordHistory: (keyword?: string) =>
+    request<HotwordRow[]>(
+      `/api/hotwords${keyword ? `?keyword=${encodeURIComponent(keyword)}` : ''}`,
+    ),
+  hotwordKeywords: () => request<HotwordKeyword[]>('/api/hotwords/keywords'),
 }
