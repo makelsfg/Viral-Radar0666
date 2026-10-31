@@ -143,7 +143,14 @@ export default function DataPanel() {
       sorter: (a, b) => (a.price_final ?? 0) - (b.price_final ?? 0),
       render: (v: number | null) => (v == null ? '—' : `¥${v.toFixed(2)}`),
     },
-    { title: '已售', dataIndex: 'sold_text', width: 108, render: (t: string | null) => t || '—' },
+    {
+      title: '已售',
+      dataIndex: 'sold_text',
+      width: 108,
+      defaultSortOrder: 'descend',
+      sorter: (a, b) => (a.sold_lb ?? -1) - (b.sold_lb ?? -1),
+      render: (t: string | null) => t || '—',
+    },
     { title: '加购', dataIndex: 'cart_text', width: 118, render: (t: string | null) => t || '—' },
     {
       title: '店铺',

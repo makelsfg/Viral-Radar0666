@@ -38,7 +38,7 @@ def canonical_url(item_id: str) -> str:
     return f"https://detail.tmall.com/item.htm?id={item_id}"
 
 
-_SEARCH_MATCH_KEYS = ("q", "keywords", "page", "beginPage", "tab", "sort", "sortType")
+_SEARCH_MATCH_KEYS = ("q", "keywords", "page", "beginPage")
 
 
 def same_search_url(a: str, b: str) -> bool:

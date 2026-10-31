@@ -1,6 +1,6 @@
 # 爆款雷达 · 交接说明（HANDOFF）
 
-> 当前版本：**0.10.0**（2026-10-31）
+> 当前版本：**0.11.0**（2026-10-31）
 > 项目目录：`E:\agent_培训代码库\爆款分析\baokuan-radar`
 > 新会话请先读本文件 + 项目记忆 `project_baokuan_radar.md`，再继续。
 
@@ -17,7 +17,7 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - 前端：React + TypeScript + Vite + Ant Design 5（`web/`）
 - 后端：FastAPI（`server/`）+ Playwright/patchright（`bkr/`）+ SQLite（`data/radar.db`）
 - 配置：`config/settings.yaml`（浏览器 channel=msedge，engine=auto；当前自动使用 **patchright**；detail.provider=local；LLM key 已配置）
-- 版本探针：`GET /api/health` → 应显示 `0.10.0`、`engine=patchright`、`channel=msedge`
+- 版本探针：`GET /api/health` → 应显示 `0.11.0`、`engine=patchright`、`channel=msedge`
 - 前端四个页签：采集 / 数据 / 分析 / 热词
 
 ## 当前流程
@@ -36,6 +36,13 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 - 每平台仅保留一个工作标签页（列表/详情复用；详情弹窗临时关闭），移除 keep-alive/乱码标签
 - 1688 销量解析兼容"成交 N 笔 / 已售 N 个 / N万+"；详情已售/加购回填快照，数据页可显示并按已售排序
+
+## 最近变更（0.11.0）
+
+- 淘宝/天猫忽略 URL `sort=sale-desc`：改为页面加载后真实点击“天猫 → 销量”，DOM 选中态确认，日志输出 `[排序]` 与每页前 8 个已售下限
+- 1688 依次尝试点击“销量 / 成交额”页签；无法确认时打印 `[排序][警告]`
+- 数据表“已售”列默认降序；详情样本仍按本地已售下限排序兜底
+- 新增 `bkr/sort_ui.py`（find_text_elements / ensure_sort / ensure_mall_tab）
 
 ## 已知问题（正在验证）
 

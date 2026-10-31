@@ -13,6 +13,7 @@ from .config import DATA_DIR
 from .pace import get_pace
 from .parse import canonical_url, extract_item_id, parse_price, parse_shop_name, parse_sold_text
 from .parse import same_search_url
+from .sort_ui import ensure_mall_tab, ensure_sort
 
 SEARCH_URL = "https://s.taobao.com/search?q={q}&tab={tab}&sort={sort}&page={page}"
 
@@ -109,13 +110,20 @@ def open_search_page(ctx, task, pageno: int):
     try:
         if same_search_url(page.url or "", url):
             print("    [复用] 工作标签页已在目标搜索页，无需重新加载")
+            _apply_sort(page, task)
             return page
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
         try:
             page.wait_for_selector('a[href*="item.htm"]', timeout=15000)
         except Exception:
             pass
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(1500)
+        _apply_sort(page, task)
+        try:
+            page.wait_for_selector('a[href*="item.htm"]', timeout=10000)
+        except Exception:
+            pass
+        page.wait_for_timeout(1200)
         try:
             page.mouse.wheel(0, 1200)
             page.wait_for_timeout(800)
@@ -125,6 +133,13 @@ def open_search_page(ctx, task, pageno: int):
     except Exception:
         raise
     return page
+
+
+def _apply_sort(page, task) -> None:
+    """淘宝搜索会忽略 URL 的 sort 参数，必须在页面上真实点击“天猫 → 销量”。"""
+    if getattr(task, "tab", "") == "mall":
+        ensure_mall_tab(page)
+    ensure_sort(page, ("销量", "销量排序"))
 
 
 def _dump_search_page(page, task, pageno: int) -> str:
@@ -160,6 +175,18 @@ def _dump_search_page(page, task, pageno: int) -> str:
     return str(d)
 
 
+def _log_sold_sample(cards: list[dict], pageno: int, task) -> None:
+    """打印本页已售前列，便于人工确认“销量排序”是否真的生效。"""
+    page_cards = [c for c in cards if c.get("page_no") == pageno and c.get("sold_lb")]
+    if not page_cards:
+        return
+    vals = [c["sold_lb"] for c in page_cards[:8]]
+    print(f"    [校验] 第 {pageno} 页前 {len(vals)} 个已售下限：{vals}")
+    inversions = sum(1 for a, b in zip(vals, vals[1:]) if a < b)
+    if inversions >= max(1, len(vals) // 3):
+        print("    [校验][警告] 已售值整体不是降序，页面的销量排序可能未生效（已记录日志）")
+
+
 def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
     """采集搜索结果的指定页区间，返回去重后的候选卡片列表（带 rank/page_no）。"""
     cards: list[dict] = []
@@ -178,6 +205,7 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
                     c["page_no"] = pageno
                     cards.append(c)
             print(f"  本页解析 {len(raws)} 张卡片，累计有效候选 {len(cards)} 个")
+            _log_sold_sample(cards, pageno, task)
         except EmptyResultError:
             raise
         except Exception:

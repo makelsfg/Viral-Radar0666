@@ -13,6 +13,7 @@ from urllib.parse import quote
 from ..browser import BlockedError, check_blocked, get_work_page, human_move, polite_sleep
 from ..pace import get_pace
 from ..parse import parse_count, parse_price, same_search_url
+from ..sort_ui import ensure_sort
 
 SEARCH_URL = "https://s.1688.com/selloffer/offer_search.htm?keywords={q}&beginPage={page}"
 DETAIL_URL = "https://detail.1688.com/offer/{iid}.html"
@@ -123,13 +124,20 @@ def open_search_page(ctx, task, pageno: int):
     try:
         if same_search_url(page.url or "", url):
             print("    [复用] 工作标签页已在目标搜索页，无需重新加载")
+            ensure_sort(page, ("销量", "成交额", "成交额排序"))
             return page
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
         try:
             page.wait_for_selector('a[href*="/offer/"]', timeout=20000)
         except Exception:
             pass
-        page.wait_for_timeout(2500)
+        page.wait_for_timeout(1500)
+        ensure_sort(page, ("销量", "成交额", "成交额排序"))
+        try:
+            page.wait_for_selector('a[href*="/offer/"]', timeout=10000)
+        except Exception:
+            pass
+        page.wait_for_timeout(1500)
         try:
             page.mouse.wheel(0, 1200)
             page.wait_for_timeout(1000)
@@ -162,6 +170,14 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
                     c["page_no"] = pageno
                     cards.append(c)
             print(f"  1688 本页解析 {len(raws)} 张卡片，累计 {len(cards)} 个")
+            page_solds = [c["sold_lb"] for c in cards
+                          if c.get("page_no") == pageno and c.get("sold_lb")]
+            if page_solds:
+                vals = page_solds[:8]
+                print(f"    [校验] 1688 第 {pageno} 页前 {len(vals)} 个已售下限：{vals}")
+                inv = sum(1 for a, b in zip(vals, vals[1:]) if a < b)
+                if inv >= max(1, len(vals) // 3):
+                    print("    [校验][警告] 已售值整体不是降序，1688 排序可能未生效")
         finally:
             # 页面常驻，避免关闭最后一个标签导致 Edge 退出
             pass
