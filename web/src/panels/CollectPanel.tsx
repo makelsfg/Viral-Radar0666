@@ -35,6 +35,11 @@ const STATUS_COLOR: Record<string, string> = {
   failed: 'error',
   timeout: 'warning',
 }
+const PLATFORM_LABELS: Record<string, string> = {
+  tmall: '天猫',
+  '1688': '1688',
+  pdd: '拼多多',
+}
 
 export default function CollectPanel() {
   const { message } = AntApp.useApp()
@@ -237,6 +242,29 @@ export default function CollectPanel() {
             <span>批次：{job.batch || '—'}</span>
             <span className="hint">{job.message}</span>
           </Space>
+
+          {job.platforms && job.platforms.length > 1 && (
+            <div style={{ marginTop: 10 }}>
+              <span className="hint" style={{ marginRight: 8 }}>
+                平台队列（串行执行）：
+              </span>
+              <Space wrap>
+                {job.platforms.map((p, idx) => {
+                  const currentIdx = job.task_index ?? 1
+                  const state = idx + 1 < currentIdx ? 'done' : idx + 1 === currentIdx ? 'running' : 'waiting'
+                  return (
+                    <Tag
+                      key={p}
+                      color={state === 'done' ? 'success' : state === 'running' ? 'processing' : 'default'}
+                    >
+                      {PLATFORM_LABELS[p] || p}
+                      {state === 'running' ? ' · 进行中' : state === 'done' ? ' · 已完成' : ' · 等待'}
+                    </Tag>
+                  )
+                })}
+              </Space>
+            </div>
+          )}
           <div style={{ marginTop: 16 }}>
             <div className="hint">
               搜索页 {job.page_done}/{job.pages}　候选商品 {job.items_count} 个
