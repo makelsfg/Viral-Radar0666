@@ -31,6 +31,20 @@ def test_alibaba_normalize_card():
     assert card["price_text"].startswith("¥")
 
 
+def test_alibaba_sold_variants():
+    t = _Task()
+    for text, want in [
+        ("成交 300+ 笔\n义乌市宏达日用品厂", 300),
+        ("已售 90+ 个\n义乌市宏达日用品厂", 90),
+        ("已售3.0万+个\n工厂", 30000),
+    ]:
+        card = alibaba.normalize_card(
+            {"item_id": "1", "title_attr": "x", "text": text, "img": ""}, t
+        )
+        assert card is not None
+        assert card["sold_lb"] == want
+
+
 def test_alibaba_price_filter():
     t = _Task()
     t.price_min = 100

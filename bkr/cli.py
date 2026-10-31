@@ -19,7 +19,7 @@ def _find_task(task_id: str):
 
 def cmd_login(args) -> None:
     from .browser import login
-    login(getattr(args, "site", "taobao"))
+    login(getattr(args, "site", "taobao"), getattr(args, "profile", None))
 
 
 def cmd_logout(_args) -> None:
@@ -112,6 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("login", help="打开浏览器人工登录并保存登录态")
     p.add_argument("--site", choices=["taobao", "1688"], default="taobao")
+    p.add_argument("--profile", default=None, help="独立 profile 名（如 tmall / 1688）")
 
     sub.add_parser("logout", help="清除当前 profile 的登录态（换账号前使用）")
 

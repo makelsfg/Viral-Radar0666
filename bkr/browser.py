@@ -185,27 +185,11 @@ def launch_context(p, headless: bool = False, kill_stale: bool = False, profile_
                         )
                 except Exception as exc:
                     print(f"[browser] 登录态注入失败：{exc}")
-            # 保留一个 keep-alive 标签页：Edge/Chrome 在关闭最后一个标签时会退出整个浏览器，
-# 采集中会反复打开/关闭工作标签页，必须留一个常驻页撑住会话。
+            # 每平台只保留一个工作标签页：列表/详情都在它上面导航；关闭弹窗不影响浏览器
             try:
-                keeper = None
-                for pg in list(ctx.pages):
-                    if (pg.url or "") in ("about:blank", ""):
-                        if keeper is None:
-                            keeper = pg
-                        else:
-                            pg.close()
-                if keeper is None:
-                    keeper = ctx.new_page()
-                try:
-                    keeper.goto(
-                        "data:text/html,<title>爆款雷达 · 采集会话（请勿关闭）</title>"
-                        "<body style='font-family:system-ui;padding:40px;color:#666'>"
-                        "采集会话运行中，请勿关闭此窗口。</body>"
-                    )
-                except Exception:
-                    pass
-                print(f"[browser] keep-alive 已就绪（当前 {len(ctx.pages)} 个标签）")
+                work = ctx.pages[0] if ctx.pages else ctx.new_page()
+                ctx._bkr_work_page = work  # type: ignore[attr-defined]
+                print("[browser] 工作标签页已就绪（每平台 1 个）")
             except Exception:
                 pass
             try:
@@ -246,6 +230,21 @@ def launch_context(p, headless: bool = False, kill_stale: bool = False, profile_
         f"浏览器启动失败：{last_exc}。请关闭所有 Edge/Chrome 窗口后重试，"
         "或在 config/settings.yaml 将 browser.channel 改为 \"\" 使用内置 Chromium"
     )
+
+
+def get_work_page(ctx):
+    """每个平台只保留一个工作标签页：列表/详情都在它上面导航。"""
+    if CDP_URL:
+        return ctx.new_page()
+    page = getattr(ctx, "_bkr_work_page", None)
+    if page is not None and not page.is_closed():
+        return page
+    page = ctx.new_page()
+    try:
+        ctx._bkr_work_page = page  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    return page
 
 
 def close_context(ctx) -> None:
@@ -336,7 +335,7 @@ def wait_for_login(ctx, site: str = "taobao", timeout: int = 300, poll: float = 
     """
     site = (site or "taobao").strip().lower()
     target = "https://www.1688.com" if site == "1688" else "https://www.taobao.com"
-    page = ctx.new_page()
+    page = get_work_page(ctx)
     page.goto(target, wait_until="domcontentloaded")
 
     hits = 0

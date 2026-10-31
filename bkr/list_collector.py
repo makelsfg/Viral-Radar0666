@@ -8,10 +8,11 @@ import re
 from datetime import datetime
 from urllib.parse import quote
 
-from .browser import EmptyResultError, check_blocked, polite_sleep
+from .browser import EmptyResultError, check_blocked, get_work_page, polite_sleep
 from .config import DATA_DIR
 from .pace import get_pace
 from .parse import canonical_url, extract_item_id, parse_price, parse_shop_name, parse_sold_text
+from .parse import same_search_url
 
 SEARCH_URL = "https://s.taobao.com/search?q={q}&tab={tab}&sort={sort}&page={page}"
 
@@ -101,11 +102,14 @@ def search_url(task, pageno: int) -> str:
 
 
 def open_search_page(ctx, task, pageno: int):
-    """打开指定搜索页并等到商品链接出现；返回 Page（调用方负责关闭）。"""
-    page = ctx.new_page()
+    """在平台唯一的工作标签页里打开搜索页（返回 Page；不关闭）。"""
+    page = get_work_page(ctx)
     url = search_url(task, pageno)
     print(f"  搜索页 {pageno}/{task.pages}: {url}")
     try:
+        if same_search_url(page.url or "", url):
+            print("    [复用] 工作标签页已在目标搜索页，无需重新加载")
+            return page
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
         try:
             page.wait_for_selector('a[href*="item.htm"]', timeout=15000)
@@ -119,10 +123,6 @@ def open_search_page(ctx, task, pageno: int):
             pass
         check_blocked(page)
     except Exception:
-        try:
-            page.close()
-        except Exception:
-            pass
         raise
     return page
 

@@ -271,11 +271,27 @@ def upsert_snapshot(
     )
 
 
-def set_snapshot_detail(conn, task_id: str, item_id: str, batch: str, price_final: float | None) -> None:
+def set_snapshot_detail(
+    conn,
+    task_id: str,
+    item_id: str,
+    batch: str,
+    price_final: float | None,
+    *,
+    sold_text: str | None = None,
+    sold_lb: int | None = None,
+    cart_text: str | None = None,
+    cart_lb: int | None = None,
+) -> None:
     conn.execute(
-        """UPDATE fact_snapshot SET price_final=?, is_detail=1
+        """UPDATE fact_snapshot SET price_final=?, is_detail=1,
+             sold_text=COALESCE(sold_text, ?), sold_lb=COALESCE(sold_lb, ?),
+             cart_text=COALESCE(?, cart_text), cart_lb=COALESCE(?, cart_lb)
            WHERE task_id=? AND item_id=? AND batch=?""",
-        (price_final, task_id, item_id, batch),
+        (
+            price_final, sold_text, sold_lb, cart_text, cart_lb,
+            task_id, item_id, batch,
+        ),
     )
     conn.commit()
 

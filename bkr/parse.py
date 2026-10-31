@@ -38,6 +38,23 @@ def canonical_url(item_id: str) -> str:
     return f"https://detail.tmall.com/item.htm?id={item_id}"
 
 
+_SEARCH_MATCH_KEYS = ("q", "keywords", "page", "beginPage", "tab", "sort", "sortType")
+
+
+def same_search_url(a: str, b: str) -> bool:
+    """宽松比较两个搜索页 URL：同域名 + 目标 URL 里出现的每个关键参数都一致。"""
+    from urllib.parse import parse_qs, urlparse
+
+    try:
+        ua, ub = urlparse(a or ""), urlparse(b or "")
+    except ValueError:
+        return False
+    if not ua.netloc or ua.netloc != ub.netloc:
+        return False
+    qa, qb = parse_qs(ua.query), parse_qs(ub.query)
+    return all(qa.get(k) == qb.get(k) for k in _SEARCH_MATCH_KEYS if k in qb)
+
+
 def parse_count(text) -> Optional[int]:
     """"500+" / "2万+" / "1.2万" / "600" -> 下限整数。"""
     if text is None:

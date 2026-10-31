@@ -10,9 +10,9 @@ import random
 import re
 from urllib.parse import quote
 
-from ..browser import BlockedError, check_blocked, human_move, polite_sleep
+from ..browser import BlockedError, check_blocked, get_work_page, human_move, polite_sleep
 from ..pace import get_pace
-from ..parse import parse_count, parse_price
+from ..parse import parse_count, parse_price, same_search_url
 
 SEARCH_URL = "https://s.1688.com/selloffer/offer_search.htm?keywords={q}&beginPage={page}"
 DETAIL_URL = "https://detail.1688.com/offer/{iid}.html"
@@ -116,10 +116,14 @@ def search_url(task, pageno: int) -> str:
 
 
 def open_search_page(ctx, task, pageno: int):
-    page = ctx.new_page()
+    """在平台唯一的工作标签页里打开搜索页（返回 Page；不关闭）。"""
+    page = get_work_page(ctx)
     url = search_url(task, pageno)
     print(f"  1688 搜索页 {pageno}/{task.pages}: {url}")
     try:
+        if same_search_url(page.url or "", url):
+            print("    [复用] 工作标签页已在目标搜索页，无需重新加载")
+            return page
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
         try:
             page.wait_for_selector('a[href*="/offer/"]', timeout=20000)
@@ -133,10 +137,6 @@ def open_search_page(ctx, task, pageno: int):
             pass
         check_blocked(page)
     except Exception:
-        try:
-            page.close()
-        except Exception:
-            pass
         raise
     return page
 

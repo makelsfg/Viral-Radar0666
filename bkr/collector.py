@@ -18,7 +18,7 @@ from .browser import (
 )
 from .config import RAW_DIR
 from .pace import get_pace
-from .parse import parse_price
+from .parse import parse_price, same_search_url as _same_search_url
 
 
 def _platform_adapters(platform: str):
@@ -162,7 +162,11 @@ def _collect_details_by_click(
                     "updated_at": datetime.now().isoformat(timespec="seconds"),
                     "first_seen_at": datetime.now().isoformat(timespec="seconds"),
                 })
-                db.set_snapshot_detail(conn, task.task_id, iid, batch, price_final)
+                db.set_snapshot_detail(
+                    conn, task.task_id, iid, batch, price_final,
+                    sold_text=detail["sold_text"], sold_lb=detail["sold_lb"],
+                    cart_text=detail["cart_text"], cart_lb=detail["cart_lb"],
+                )
                 processed += 1
                 db.set_batch(conn, batch, task.task_id, stage="detail",
                              detail_done=done_count + processed)
