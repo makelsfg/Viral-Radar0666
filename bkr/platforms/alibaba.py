@@ -92,8 +92,16 @@ def normalize_card(raw: dict, task) -> dict | None:
     }
 
 
+def _quote_keyword(keyword: str) -> str:
+    """1688 搜索参数使用 GBK 编码；无法编码的字符退回 UTF-8。"""
+    try:
+        return quote(keyword, encoding="gbk", errors="strict")
+    except UnicodeEncodeError:
+        return quote(keyword, encoding="utf-8")
+
+
 def search_url(task, pageno: int) -> str:
-    return SEARCH_URL.format(q=quote(task.keywords[0]), page=pageno)
+    return SEARCH_URL.format(q=_quote_keyword(task.keywords[0]), page=pageno)
 
 
 def open_search_page(ctx, task, pageno: int):

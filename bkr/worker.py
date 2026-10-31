@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 
 from . import db
 from .collector import run_task
-from .config import Task
+from .config import Task, state_path_for
 
 
 def _loads(value, default):
@@ -53,6 +54,7 @@ def main() -> None:
     args = parser.parse_args()
 
     task = load_task(args.task_id)
+    os.environ["BK_STATE_FILE"] = str(state_path_for(task.platform))
     print(f"[worker] start task={task.task_id} platform={task.platform} batch={args.batch}")
     run_task(task, batch=args.batch, resume=args.resume)
 

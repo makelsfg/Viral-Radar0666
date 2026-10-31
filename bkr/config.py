@@ -82,7 +82,14 @@ def profile_dir_for(profile: str | None = None) -> Path:
 
 PROFILE_DIR = profile_dir_for(_PROFILE)
 SECRETS_DIR = ROOT / ".secrets"
-STATE_PATH = SECRETS_DIR / "state.json"
+
+
+def state_path_for(profile: str | None = None) -> Path:
+    name = (profile or "").strip()
+    return SECRETS_DIR / (f"state-{name}.json" if name else "state.json")
+
+
+STATE_PATH = state_path_for(None)
 
 
 class ConfigError(ValueError):

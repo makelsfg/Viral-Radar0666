@@ -1,4 +1,4 @@
-"""平台授权状态：直接读取各平台独立 profile 的 cookie 判断。
+"""平台授权状态：读取各平台独立 profile 的 cookie（处理文件锁与过期）。
 
 约定：
   tmall -> 必须 cookie2 + unb（严格，tracknick 半登录不算）
@@ -6,10 +6,32 @@
 """
 from __future__ import annotations
 
+import datetime
+import shutil
 import sqlite3
+import tempfile
+from pathlib import Path
 
 from .browser import has_login_cookies
 from .config import profile_dir_for
+
+
+def _query_names(db_path: Path) -> set[str]:
+    # Chromium expires_utc: microseconds since 1601-01-01 (UTC); 0 = session cookie
+    now_us = int(
+        (datetime.datetime.utcnow() - datetime.datetime(1601, 1, 1)).total_seconds() * 1_000_000
+    )
+    conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            """SELECT name FROM Cookies
+               WHERE (host_key LIKE '%taobao.com' OR host_key LIKE '%1688.com')
+                 AND (expires_utc = 0 OR expires_utc > ?)""",
+            (now_us,),
+        ).fetchall()
+        return {row[0] for row in rows}
+    finally:
+        conn.close()
 
 
 def cookie_names(platform: str) -> set[str]:
@@ -19,18 +41,26 @@ def cookie_names(platform: str) -> set[str]:
     if cookie_file is None:
         return set()
     try:
-        conn = sqlite3.connect(cookie_file.as_uri() + "?mode=ro", uri=True)
-        try:
-            return {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM Cookies WHERE host_key LIKE '%taobao.com' OR host_key LIKE '%1688.com'"
-                ).fetchall()
-            }
-        finally:
-            conn.close()
+        return _query_names(cookie_file)
     except sqlite3.Error:
-        return set()
+        # Edge 运行时会锁住 Cookies，复制一份临时副本再读
+        tmp_path = None
+        try:
+            fd, tmp_name = tempfile.mkstemp(suffix=".db")
+            tmp_path = Path(tmp_name)
+            import os
+
+            os.close(fd)
+            shutil.copy2(cookie_file, tmp_path)
+            return _query_names(tmp_path)
+        except Exception:
+            return set()
+        finally:
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
 
 
 def is_authorized(platform: str) -> bool:

@@ -11,6 +11,7 @@ CDP 模式（BK_CDP_URL，例如 http://127.0.0.1:9222）：接管你手动启�
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import random
 import subprocess
@@ -18,7 +19,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from .config import PROFILE_DIR, STATE_PATH, profile_dir_for
+from .config import PROFILE_DIR, STATE_PATH, profile_dir_for, state_path_for
 
 CDP_URL = (os.environ.get("BK_CDP_URL") or "").strip()
 CHANNEL = (os.environ.get("BK_BROWSER_CHANNEL") or "").strip()
@@ -163,6 +164,32 @@ def launch_context(p, headless: bool = False, kill_stale: bool = False, profile_
                 ctx = p.chromium.launch_persistent_context(**launch_kwargs)
             try:
                 ctx._bkr_owned = True  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            # 注入按平台保存的登录态（解决 session cookie 在新浏览器里不恢复的问题）
+            state_file = (os.environ.get("BK_STATE_FILE") or "").strip()
+            if state_file:
+                try:
+                    state = json.loads(Path(state_file).read_text(encoding="utf-8"))
+                    cookies = state.get("cookies") or []
+                    try:
+                        existing = {c.get("name") for c in ctx.cookies()}
+                    except Exception:
+                        existing = set()
+                    missing = [c for c in cookies if c.get("name") not in existing]
+                    if missing:
+                        ctx.add_cookies(missing)
+                        print(
+                            f"[browser] 已注入登录态 {Path(state_file).name}"
+                            f"（补充 {len(missing)} 个 cookie）"
+                        )
+                except Exception as exc:
+                    print(f"[browser] 登录态注入失败：{exc}")
+            # 关闭持久化 context 自带的 about:blank 空白页
+            try:
+                for pg in list(ctx.pages):
+                    if (pg.url or "") in ("about:blank", ""):
+                        pg.close()
             except Exception:
                 pass
             try:
@@ -348,8 +375,8 @@ def login(site: str = "taobao", profile: str | None = None) -> None:
             if logged_in:
                 time.sleep(2)  # 等 cookie 落盘稳定后再关闭，避免半登录
             try:
-                ctx.storage_state(path=str(STATE_PATH))
-                print(f"登录态快照已保存：{STATE_PATH}")
+                ctx.storage_state(path=str(state_path_for(profile)))
+                print(f"登录态快照已保存：{state_path_for(profile)}")
             except Exception:
                 print("未能导出登录快照（浏览器已关闭）；登录态仍以本地 profile 为准")
         finally:

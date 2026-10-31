@@ -21,6 +21,7 @@ export default function App() {
   const [env, setEnv] = useState<EnvStatus | null>(null)
   const [loginRunning, setLoginRunning] = useState<'tmall' | '1688' | null>(null)
   const loginRef = useRef<string | null>(null)
+  const envRefreshRef = useRef(0)
 
   const loadEnv = () => {
     api
@@ -34,6 +35,14 @@ export default function App() {
   }, [])
 
   useSse((e: any) => {
+    if (e?.type === 'job' && e.job?.type === 'collect') {
+      const now = Date.now()
+      if (now - envRefreshRef.current > 3000) {
+        envRefreshRef.current = now
+        loadEnv()
+      }
+      return
+    }
     if (e?.type !== 'job' || e.job?.type !== 'login') return
     if (e.job.id !== loginRef.current) return
     if (e.job.status === 'done') {

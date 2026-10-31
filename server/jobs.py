@@ -13,7 +13,7 @@ from datetime import datetime
 
 from bkr import db
 from bkr.auth import is_authorized, login_site
-from bkr.config import ROOT, Task, profile_dir_for
+from bkr.config import ROOT, Task, profile_dir_for, state_path_for
 
 
 class BusyError(RuntimeError):
@@ -184,7 +184,6 @@ class JobManager:
     def _login_platform(self, platform: str) -> tuple[bool, str]:
         """打开单平台登录窗口，等待登录完成（成功/关闭/超时）。"""
         from bkr.browser import browser_runtime, close_context, launch_context, wait_for_login
-        from bkr.config import STATE_PATH
 
         try:
             with browser_runtime() as p:
@@ -195,14 +194,36 @@ class JobManager:
                     ok, reason = wait_for_login(ctx, login_site(platform))
                     if ok:
                         try:
-                            ctx.storage_state(path=str(STATE_PATH))
+                            ctx.storage_state(path=str(state_path_for(platform)))
                         except Exception:
                             pass
                     return ok, reason
                 finally:
                     close_context(ctx)
+                    # 给浏览器进程一点时间释放 profile 与落盘 cookie
+                    time.sleep(1.5)
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
+
+    def _ensure_state(self, platform: str) -> None:
+        """已登录但缺少 storage_state 时，headless 打开一次导出（不发网络请求）。"""
+        path = state_path_for(platform)
+        if path.exists() or not is_authorized(platform):
+            return
+        try:
+            from bkr.browser import browser_runtime, close_context, launch_context
+
+            with browser_runtime() as p:
+                ctx = launch_context(
+                    p, headless=True, profile_dir=profile_dir_for(platform), kill_stale=True
+                )
+                try:
+                    ctx.storage_state(path=str(path))
+                finally:
+                    close_context(ctx)
+            print(f"[job] 已为 {platform} 导出登录态：{path.name}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[job] 导出 {platform} 登录态失败：{exc}")
 
     def _run_job(
         self,
@@ -215,6 +236,9 @@ class JobManager:
         try:
             job["auth_statuses"] = self._auth_statuses(tasks)
             self._publish(job)
+
+            for task in tasks:
+                self._ensure_state(task.platform)
 
             missing = [t for t in tasks if not is_authorized(t.platform)]
             if auth_first:
@@ -400,7 +424,6 @@ class JobManager:
     def _run_login(self, job: dict) -> None:
         try:
             from bkr.browser import browser_runtime, close_context, launch_context, wait_for_login
-            from bkr.config import STATE_PATH
 
             profile = job.get("profile")
             site = job.get("site") or "taobao"
@@ -412,7 +435,7 @@ class JobManager:
                     ok, reason = wait_for_login(ctx, site)
                     if ok:
                         try:
-                            ctx.storage_state(path=str(STATE_PATH))
+                            ctx.storage_state(path=str(state_path_for(profile)))
                         except Exception:
                             pass
                         job["status"] = "done"
