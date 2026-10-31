@@ -205,6 +205,16 @@ def launch_context(p, headless: bool = False, kill_stale: bool = False, profile_
                     )
                 except Exception:
                     pass
+                print(f"[browser] keep-alive 已就绪（当前 {len(ctx.pages)} 个标签）")
+            except Exception:
+                pass
+            try:
+                ctx.on(
+                    "close",
+                    lambda _c: print(
+                        f"[browser] context closed（由程序关闭={getattr(ctx, '_bkr_app_closing', False)}）"
+                    ),
+                )
             except Exception:
                 pass
             try:
@@ -244,6 +254,10 @@ def close_context(ctx) -> None:
         return
     if not getattr(ctx, "_bkr_owned", True):
         return
+    try:
+        ctx._bkr_app_closing = True  # type: ignore[attr-defined]
+    except Exception:
+        pass
     try:
         ctx.close()
     except Exception:

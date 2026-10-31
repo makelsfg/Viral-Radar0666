@@ -34,6 +34,8 @@
 > v0.8.2（2026-10-31）：修复并行采集崩溃：Edge 在关闭最后一个标签页时退出浏览器，导致列表阶段结束后 worker 详情阶段 `TargetClosedError`。现在每个会话保留一个 keep-alive 标签页（标题"请勿关闭"）；worker 增加通用异常捕获（异常写入 batch_run 并打印 traceback）；每个平台输出独立日志 `data/logs/{batch}_{platform}.log`；worker 异常退出时父任务把仍为 running 的平台标记失败并附日志路径。1688 关键词 GBK、cookie 锁修复保留。
 >
 > v0.8.3（2026-10-31）：修复 Windows 子进程日志编码：worker 强制 `PYTHONIOENCODING=utf-8` / `PYTHONUTF8=1`，日志中的 emoji 符号（⚠/✅）替换为 `[提示]/[完成]`，避免 GBK 编码异常导致 worker 崩溃。
+>
+> v0.8.4（2026-10-31）：修复采集过程中浏览器上下文被关闭：列表页/详情页不再提前关闭（保持到任务结束由 close_context 统一关闭），keep-alive 标签继续保留；新增 context close 日志（区分程序关闭/外部关闭），便于定位 Edge/patchright 生命周期问题。
 
 ---
 

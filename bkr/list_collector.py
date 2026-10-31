@@ -178,8 +178,14 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
                     c["page_no"] = pageno
                     cards.append(c)
             print(f"  本页解析 {len(raws)} 张卡片，累计有效候选 {len(cards)} 个")
+        except EmptyResultError:
+            raise
+        except Exception:
+            raise
         finally:
-            page.close()
+            # 页面保持常驻，避免 Edge 在关闭最后一个工作标签时退出浏览器；
+            # 会话结束时由 close_context 统一关闭。
+            pass
         pace = get_pace(getattr(task, "pace", "safe"))
         polite_sleep(pace["list_lo"], pace["list_hi"])
 

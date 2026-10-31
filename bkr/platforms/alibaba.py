@@ -152,7 +152,8 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
                     cards.append(c)
             print(f"  1688 本页解析 {len(raws)} 张卡片，累计 {len(cards)} 个")
         finally:
-            page.close()
+            # 页面常驻，避免关闭最后一个标签导致 Edge 退出
+            pass
         pace = get_pace(getattr(task, "pace", "safe"))
         polite_sleep(pace["list_lo"], pace["list_hi"])
 

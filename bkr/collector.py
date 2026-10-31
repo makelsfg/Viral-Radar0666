@@ -116,7 +116,7 @@ def _collect_details_by_click(
     processed = 0
     for pageno in sorted(by_page):
         items = by_page[pageno]
-        print(f"  打开搜索结果第 {pageno} 页，准备点击进入 {len(items)} 个详情")
+        print(f"  打开搜索结果第 {pageno} 页，准备点击进入 {len(items)} 个详情（当前标签数 {len(ctx.pages)}）")
         list_page = open_search_page_fn(ctx, task, pageno)
         try:
             # 先像真人一样随意浏览一会儿列表，再开始点
@@ -174,10 +174,8 @@ def _collect_details_by_click(
                     print(f"  （休息 {pause:.0f} 秒，模拟正常浏览节奏）")
                 time.sleep(pause)
         finally:
-            try:
-                list_page.close()
-            except Exception:
-                pass
+            # 列表页保持常驻，任务结束时随 context 一起关闭，避免浏览器退出
+            pass
     return processed
 
 
