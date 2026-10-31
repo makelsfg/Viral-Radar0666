@@ -102,6 +102,7 @@ export interface PlatformRuntimeStatus {
 export interface EnvStatus {
   logged_in: boolean
   busy: boolean
+  pdd_api?: boolean
   profiles: { tmall: boolean; '1688': boolean; pdd: boolean }
 }
 

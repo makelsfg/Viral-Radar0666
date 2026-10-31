@@ -232,6 +232,12 @@ class JobManager:
 
         if cancel_event is not None and cancel_event.is_set():
             return False, "cancelled"
+        if platform == "pdd":
+            from bkr.providers import pdd_ddk
+
+            if not pdd_ddk.configured():
+                return False, pdd_ddk.config_hint()
+            return True, "ok"
         try:
             with browser_runtime() as p:
                 ctx = launch_context(
@@ -263,6 +269,8 @@ class JobManager:
 
     def _ensure_state(self, platform: str) -> None:
         """已登录但缺少 storage_state 时，headless 打开一次导出（不发网络请求）。"""
+        if platform == "pdd":
+            return
         path = state_path_for(platform)
         if path.exists() or not is_authorized(platform):
             return

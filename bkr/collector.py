@@ -187,6 +187,108 @@ def _collect_details_by_click(
     return processed
 
 
+def _run_pdd_api(conn, task, batch: str) -> None:
+    """拼多多官方开放平台通道：不启动浏览器，直接走多多进宝商品搜索。"""
+    from .providers import pdd_ddk
+
+    if not pdd_ddk.configured():
+        raise RuntimeError(pdd_ddk.config_hint())
+
+    print(f"[{task.task_id}] 拼多多官方 API 采集（{task.pages} 页，详情 {task.detail_top} 个）")
+    sign_map: dict[str, str | None] = {}
+    cards: list[dict] = []
+    for pageno in range(1, task.pages + 1):
+        goods = pdd_ddk.search_goods(task.keywords[0], pageno, page_size=50, sort_type=1)
+        for g in goods:
+            c = pdd_ddk.map_card(g, task)
+            if not c:
+                continue
+            c["page_no"] = pageno
+            sign_map[c["item_id"]] = c.pop("goods_sign", None)
+            cards.append(c)
+        print(f"  拼多多 API 第 {pageno} 页返回 {len(goods)} 个，累计有效 {len(cards)} 个")
+        time.sleep(0.3)
+
+    if not cards:
+        raise EmptyResultError(
+            "拼多多 API 没有返回商品（检查 client_id/client_secret、关键词与推广位权限）"
+        )
+
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for c in cards:
+        if c["item_id"] in seen:
+            continue
+        seen.add(c["item_id"])
+        c["rank"] = len(unique) + 1
+        unique.append(c)
+    cards = unique
+
+    stamp = datetime.now().isoformat(timespec="seconds")
+    for c in cards:
+        db.upsert_snapshot(
+            conn, task.task_id, c["item_id"], batch, stamp,
+            c["rank"], c["price_text"], c["sold_text"], c["sold_lb"], None, None,
+            title=c["title"], image_url=c["image_url"],
+            shop_name=c["shop_name"], page_no=c.get("page_no"),
+            platform=task.platform,
+        )
+    conn.commit()
+    db.set_batch(
+        conn, batch, task.task_id,
+        stage="detail", page_done=task.pages, items_count=len(cards),
+    )
+    print(f"[{task.task_id}] 拼多多候选商品 {len(cards)} 个")
+
+    candidates = db.list_candidates(
+        conn, task.task_id, batch, task.detail_top, order=task.detail_order
+    )
+    pending = [r for r in candidates if not r["is_detail"]]
+    done_count = len(candidates) - len(pending)
+    print(f"[{task.task_id}] 拼多多详情：待采 {len(pending)} / 共 {len(candidates)}")
+    processed = 0
+    for r in pending:
+        iid = r["item_id"]
+        sign = sign_map.get(iid)
+        detail = pdd_ddk.goods_detail(sign) if sign else None
+        if not detail:
+            continue
+        d = pdd_ddk.map_detail(detail, iid)
+        price_final = _price_guard(d["price_final"], parse_price(r.get("price_text") or ""))
+        db.upsert_product(conn, {
+            "platform": task.platform,
+            "item_id": iid,
+            "title": d["title"] or r.get("title") or "",
+            "shop_name": d["shop_name"] or r.get("shop_name"),
+            "shop_rating": d["shop_rating"],
+            "positive_rate": d["positive_rate"],
+            "sku_names": json.dumps(d["sku_names"], ensure_ascii=False),
+            "params_json": json.dumps(d["params"], ensure_ascii=False),
+            "image_url": d["image_url"] or r.get("image_url"),
+            "video_url": d["video_url"],
+            "product_url": d["product_url"],
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "first_seen_at": datetime.now().isoformat(timespec="seconds"),
+        })
+        db.set_snapshot_detail(
+            conn, task.task_id, iid, batch, price_final,
+            sold_text=d["sold_text"], sold_lb=d["sold_lb"],
+            cart_text=d["cart_text"], cart_lb=d["cart_lb"],
+        )
+        processed += 1
+        db.set_batch(conn, batch, task.task_id, stage="detail",
+                     detail_done=done_count + processed)
+        print(f"  -> 拼多多详情 {processed}/{len(pending)}：{iid}")
+        time.sleep(0.3)
+
+    db.set_batch(
+        conn, batch, task.task_id,
+        status="done", stage="done",
+        finished_at=datetime.now().isoformat(timespec="seconds"),
+    )
+    print(f"[{task.task_id}] 拼多多 API 批次 {batch} 完成（详情 {processed} 个）")
+
+
 def run_task(task, batch: str | None = None, resume: bool = False) -> None:
     batch = batch or batch_id()
     conn = db.connect()
@@ -222,6 +324,9 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
     collect_pages_fn, open_search_page_fn, click_fn = _platform_adapters(task.platform)
 
     try:
+        if task.platform == "pdd":
+            _run_pdd_api(conn, task, batch)
+            return
         with browser_runtime() as p:
             ctx = launch_context(p, platform=task.platform)
             try:

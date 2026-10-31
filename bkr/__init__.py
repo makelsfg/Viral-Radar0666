@@ -1,2 +1,2 @@
 """爆款雷达 BaokuanRadar。"""
-__version__ = "0.13.0"
+__version__ = "0.14.0"

@@ -60,6 +60,15 @@ def _apply_settings_to_env(settings: dict) -> None:
         if apify.get("actor"):
             os.environ.setdefault("BK_APIFY_ACTOR", str(apify["actor"]).strip())
 
+    pdd = settings.get("pdd") or {}
+    if isinstance(pdd, dict):
+        if pdd.get("client_id"):
+            os.environ.setdefault("BK_PDD_CLIENT_ID", str(pdd["client_id"]).strip())
+        if pdd.get("client_secret"):
+            os.environ.setdefault("BK_PDD_CLIENT_SECRET", str(pdd["client_secret"]).strip())
+        if pdd.get("pid"):
+            os.environ.setdefault("BK_PDD_PID", str(pdd["pid"]).strip())
+
 
 _apply_settings_to_env(_load_settings())
 

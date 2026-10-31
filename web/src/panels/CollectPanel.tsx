@@ -290,7 +290,7 @@ export default function CollectPanel() {
               options={[
                 { label: '天猫', value: 'tmall' },
                 { label: '1688', value: '1688' },
-                { label: '拼多多（实验性）', value: 'pdd' },
+                { label: '拼多多（官方 API）', value: 'pdd' },
               ]}
             />
           </Form.Item>
@@ -331,8 +331,8 @@ export default function CollectPanel() {
         </Form>
         <div className="hint">
           每页约 40–60 个商品；详情样本数 = 按已售下限从高到低选取的头部商品数（越多越慢、风控压力越大）。
-          1688 / 拼多多首次使用前，请点右上角对应「登录」完成登录（各平台独立登录）。
-          拼多多为移动网页实验版，选择器可能随平台改版，失败时请查看日志。
+          1688 首次使用前，请点右上角「登录1688」完成登录；拼多多走官方开放平台 API，
+          需在 config/settings.yaml 的 pdd 段填写 client_id / client_secret。
         </div>
         {conservative && (
           <Alert

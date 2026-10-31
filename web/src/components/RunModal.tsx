@@ -71,10 +71,10 @@ export function explainError(raw?: string | null): { reason: string; advice: str
       advice: '关闭所有自动化浏览器窗口（不要关日常浏览器），重启服务后重试；仍失败可把 browser.channel 临时改为空。',
     }
   }
-  if (hit(['拼多多', 'pinduoduo', 'yangkeduo', 'App'])) {
+  if (hit(['拼多多 API', '未配置拼多多', 'client_id', 'client_secret', 'pdd.ddk'])) {
     return {
-      reason: '拼多多 H5 强制跳登录/App，或页面结构变化。',
-      advice: '确认已在弹出的窗口完成手机号登录；若仍被拦截，拼多多网页端不稳定，建议改用开放平台/多多进宝或手动导入。',
+      reason: '拼多多官方开放平台 API 未配置或调用失败。',
+      advice: '在 config/settings.yaml 的 pdd 段填写 client_id / client_secret（可选 pid）并重启；再确认应用已开通多多进宝商品搜索权限。',
     }
   }
   if (hit(['超时', 'timeout', 'Timeout', '网络', 'connection', 'Connection'])) {
