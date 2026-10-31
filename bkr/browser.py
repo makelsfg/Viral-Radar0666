@@ -13,8 +13,10 @@ from __future__ import annotations
 import importlib.util
 import os
 import random
+import subprocess
 import time
 from contextlib import contextmanager
+from pathlib import Path
 
 from .config import PROFILE_DIR, STATE_PATH
 
@@ -90,8 +92,31 @@ def browser_runtime():
         yield p
 
 
-def launch_context(p, headless: bool = False):
-    """返回 BrowserContext。CDP 优先；连不上则回退到本地浏览器（Edge/Chrome/内置）。"""
+def _kill_profile_browsers(profile: Path) -> None:
+    """只清理使用该 profile 目录的 Edge/Chrome 后台进程（不动日常浏览器）。"""
+    if os.name != "nt":
+        return
+    try:
+        script = (
+            "Get-CimInstance Win32_Process -Filter \"Name='msedge.exe' or Name='chrome.exe'\" | "
+            f"Where-Object {{ $_.CommandLine -like '*{profile}*' }} | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+        )
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            timeout=15,
+        )
+    except Exception:
+        pass
+
+
+def launch_context(p, headless: bool = False, kill_stale: bool = False):
+    """返回 BrowserContext。
+
+    启动顺序：Edge/Chrome(channel) -> 内置 Chromium(同一 profile) -> 内置 Chromium(独立回退 profile)。
+    每次启动后用 new_page() 做健康检查，失败自动尝试下一种。
+    """
     if CDP_URL:
         try:
             browser = p.chromium.connect_over_cdp(CDP_URL)
@@ -105,41 +130,68 @@ def launch_context(p, headless: bool = False):
         except Exception as exc:
             print(f"[browser] 连接 CDP 失败（{exc}），回退启动本地浏览器")
 
-    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    launch_kwargs = dict(
-        user_data_dir=str(PROFILE_DIR),
-        headless=headless,
-        viewport={"width": 1500, "height": 950},
-        locale="zh-CN",
-        timezone_id="Asia/Shanghai",
-        args=["--disable-blink-features=AutomationControlled"],
-    )
-    ctx = None
+    attempts = []
     if CHANNEL:
-        try:
-            ctx = p.chromium.launch_persistent_context(channel=CHANNEL, **launch_kwargs)
-            print(f"[browser] 使用 {CHANNEL}（{(PROFILE_DIR).name}）")
-        except Exception as exc:  # 指定浏览器不可用时回落内置 Chromium
-            print(f"[browser] {CHANNEL} 启动失败（{exc}），回退内置 Chromium")
-    if ctx is None:
-        ctx = p.chromium.launch_persistent_context(**launch_kwargs)
-    try:
-        ctx._bkr_owned = True  # type: ignore[attr-defined]
-    except Exception:
-        pass
-    # 轻量反自动化特征（patchright/rebrowser 会在引擎层做更彻底的修复）
-    try:
-        ctx.add_init_script(
-            """
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            window.chrome = window.chrome || { runtime: {} };
-            Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh'] });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-            """
+        attempts.append((f"{CHANNEL}", CHANNEL, PROFILE_DIR))
+        attempts.append(("内置 Chromium（同一 profile）", None, PROFILE_DIR))
+        attempts.append(
+            ("内置 Chromium（回退 profile）", None, PROFILE_DIR.with_name(PROFILE_DIR.name + "-fallback"))
         )
-    except Exception:
-        pass
-    return ctx
+    else:
+        attempts.append(("内置 Chromium", None, PROFILE_DIR))
+
+    last_exc: Exception | None = None
+    for label, channel, profile_dir in attempts:
+        ctx = None
+        try:
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            if kill_stale and channel:
+                _kill_profile_browsers(profile_dir)
+            launch_kwargs = dict(
+                user_data_dir=str(profile_dir),
+                headless=headless,
+                viewport={"width": 1500, "height": 950},
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            if channel:
+                ctx = p.chromium.launch_persistent_context(channel=channel, **launch_kwargs)
+            else:
+                ctx = p.chromium.launch_persistent_context(**launch_kwargs)
+            try:
+                ctx._bkr_owned = True  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            try:
+                ctx.add_init_script(
+                    """
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    window.chrome = window.chrome || { runtime: {} };
+                    Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh'] });
+                    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                    """
+                )
+            except Exception:
+                pass
+            # 健康检查：能拿到页面才算启动成功
+            probe = ctx.new_page()
+            probe.close()
+            print(f"[browser] 使用 {label}（{profile_dir.name}）")
+            return ctx
+        except Exception as exc:
+            last_exc = exc
+            print(f"[browser] {label} 启动失败：{exc}")
+            try:
+                if ctx is not None:
+                    ctx.close()
+            except Exception:
+                pass
+
+    raise RuntimeError(
+        f"浏览器启动失败：{last_exc}。请关闭所有 Edge/Chrome 窗口后重试，"
+        "或在 config/settings.yaml 将 browser.channel 改为 \"\" 使用内置 Chromium"
+    )
 
 
 def close_context(ctx) -> None:

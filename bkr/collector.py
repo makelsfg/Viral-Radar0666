@@ -215,7 +215,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
 
     try:
         with browser_runtime() as p:
-            ctx = launch_context(p)
+            ctx = launch_context(p, kill_stale=True)
             try:
                 row = db.get_batch(conn, batch, task.task_id) or {}
                 page_done = int(row.get("page_done") or 0)
