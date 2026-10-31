@@ -42,11 +42,17 @@ class EmptyResultError(RuntimeError):
 
 
 LOGIN_COOKIE_NAMES = {"cookie2", "unb"}
+PDD_COOKIE_NAMES = {"pdd_user_id", "pdd_user_uin", "PDDAccessToken", "pdd_login_token"}
 
 
 def has_login_cookies(names) -> bool:
     """淘宝登录态判定：必须同时具备 cookie2 与 unb（只有 tracknick 是半登录）。"""
     return LOGIN_COOKIE_NAMES.issubset(set(names))
+
+
+def has_pdd_login_cookies(names) -> bool:
+    """拼多多 H5 登录态：出现用户 id / token 类 cookie 即视为已登录。"""
+    return bool(PDD_COOKIE_NAMES & set(names))
 
 
 def engine_name() -> str:
@@ -112,14 +118,17 @@ def _kill_profile_browsers(profile: Path) -> None:
         pass
 
 
-def launch_context(p, headless: bool = False, kill_stale: bool = False, profile_dir=None):
+def launch_context(p, headless: bool = False, kill_stale: bool = False, profile_dir=None,
+                   platform: str | None = None):
     """返回 BrowserContext。
 
     profile_dir 可指定独立用户目录（并行时每平台一个）。
+    platform="pdd" 时使用移动端 UA/视口（拼多多 H5 只在移动布局下可用）。
     启动顺序：Edge/Chrome(channel) -> 内置 Chromium(同一 profile) -> 内置 Chromium(独立回退 profile)。
     每次启动后用 new_page() 做健康检查，失败自动尝试下一种。
     """
     base_profile = Path(profile_dir) if profile_dir is not None else PROFILE_DIR
+    mobile = (platform or os.environ.get("BK_PROFILE") or "").strip().lower() == "pdd"
     if CDP_URL:
         try:
             browser = p.chromium.connect_over_cdp(CDP_URL)
@@ -158,6 +167,17 @@ def launch_context(p, headless: bool = False, kill_stale: bool = False, profile_
                 timezone_id="Asia/Shanghai",
                 args=["--disable-blink-features=AutomationControlled"],
             )
+            if mobile:
+                launch_kwargs.update(
+                    viewport={"width": 412, "height": 915},
+                    device_scale_factor=2.625,
+                    is_mobile=True,
+                    has_touch=True,
+                    user_agent=(
+                        "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                    ),
+                )
             if channel:
                 ctx = p.chromium.launch_persistent_context(channel=channel, **launch_kwargs)
             else:
@@ -334,7 +354,10 @@ def wait_for_login(ctx, site: str = "taobao", timeout: int = 300, poll: float = 
     reason: ok / timeout / closed。
     """
     site = (site or "taobao").strip().lower()
-    target = "https://www.1688.com" if site == "1688" else "https://www.taobao.com"
+    target = {
+        "1688": "https://www.1688.com",
+        "pdd": "https://mobile.yangkeduo.com/",
+    }.get(site, "https://www.taobao.com")
     page = get_work_page(ctx)
     page.goto(target, wait_until="domcontentloaded")
 
@@ -349,10 +372,15 @@ def wait_for_login(ctx, site: str = "taobao", timeout: int = 300, poll: float = 
             return False, "closed"
         url = (page.url or "").lower()
         on_login = any(
-            k in url for k in ("login.taobao.com", "login.tmall.com", "login.1688.com")
+            k in url for k in (
+                "login.taobao.com", "login.tmall.com", "login.1688.com",
+                "login.html", "yangkeduo.com/login", "passport",
+            )
         )
         if site == "1688":
             cookie_ok = bool({"__cn_logon__", "_cn_"} & names)
+        elif site == "pdd":
+            cookie_ok = has_pdd_login_cookies(names)
         else:
             cookie_ok = has_login_cookies(names)
         if cookie_ok and not on_login:
@@ -377,9 +405,12 @@ def login(site: str = "taobao", profile: str | None = None) -> None:
         print(f"当前浏览器 profile：{pdir.name}")
     print(f"当前引擎：{engine_name()}    浏览器：{browser_channel()}")
 
-    target = "https://www.1688.com" if site == "1688" else "https://www.taobao.com"
+    target = {
+        "1688": "https://www.1688.com",
+        "pdd": "https://mobile.yangkeduo.com/",
+    }.get(site, "https://www.taobao.com")
     with browser_runtime() as p:
-        ctx = launch_context(p, profile_dir=pdir)
+        ctx = launch_context(p, profile_dir=pdir, platform=(site if site == "pdd" else None))
         page = ctx.new_page()
         try:
             page.goto(target, wait_until="domcontentloaded")
@@ -392,6 +423,8 @@ def login(site: str = "taobao", profile: str | None = None) -> None:
                 cookie_names = {c.get("name") for c in ctx.cookies()}
                 if site == "1688":
                     logged_in = bool({"__cn_logon__", "cookie2", "_cn_"} & cookie_names)
+                elif site == "pdd":
+                    logged_in = has_pdd_login_cookies(cookie_names)
                 else:
                     logged_in = has_login_cookies(cookie_names)
                 print(f"检测到浏览器 cookie {len(cookie_names)} 个")

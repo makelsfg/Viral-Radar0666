@@ -14,10 +14,10 @@ import {
   Switch,
   Tag,
 } from 'antd'
-import { PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
+import { DownloadOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import { useSse } from '../sse'
-import type { JobState } from '../types'
+import type { JobState, ReportMeta } from '../types'
 
 const STATUS_TEXT: Record<string, string> = {
   running: '采集中',
@@ -49,6 +49,7 @@ export default function CollectPanel() {
   const [job, setJob] = useState<JobState | null>(null)
   const [conservative, setConservative] = useState(true)
   const [loginRunning, setLoginRunning] = useState(false)
+  const [report, setReport] = useState<ReportMeta | null>(null)
   const jobRef = useRef<string | null>(null)
 
   const applyJob = (j: JobState) => {
@@ -74,6 +75,22 @@ export default function CollectPanel() {
     }, 3000)
     return () => window.clearInterval(timer)
   }, [job?.id, job?.status])
+
+  // 采集结束后查询本批次报告信息（含各平台条数）
+  useEffect(() => {
+    if (!job?.batch || !['done', 'failed'].includes(job.status)) {
+      setReport(null)
+      return
+    }
+    let alive = true
+    api
+      .reportMeta(job.batch)
+      .then((m) => alive && setReport(m))
+      .catch(() => alive && setReport(null))
+    return () => {
+      alive = false
+    }
+  }, [job?.status, job?.batch])
 
   const start = async (values: any) => {
     try {
@@ -115,8 +132,13 @@ export default function CollectPanel() {
   const openLogin = async () => {
     setLoginRunning(true)
     try {
-      const profile = job?.task_platform === '1688' ? '1688' : 'tmall'
-      const site = profile === '1688' ? '1688' : 'taobao'
+      const profile =
+        job?.task_platform === '1688'
+          ? '1688'
+          : job?.task_platform === 'pdd'
+            ? 'pdd'
+            : 'tmall'
+      const site = profile === '1688' ? '1688' : profile === 'pdd' ? 'pdd' : 'taobao'
       await api.login(profile, site)
       message.info('浏览器已打开，请完成扫码登录，然后点「继续采集」')
     } catch (e: any) {
@@ -191,7 +213,7 @@ export default function CollectPanel() {
               options={[
                 { label: '天猫', value: 'tmall' },
                 { label: '1688', value: '1688' },
-                { label: '拼多多（实验版，下一步接入）', value: 'pdd', disabled: true },
+                { label: '拼多多（实验性）', value: 'pdd' },
               ]}
             />
           </Form.Item>
@@ -232,7 +254,8 @@ export default function CollectPanel() {
         </Form>
         <div className="hint">
           每页约 40–60 个商品；详情样本数 = 按已售下限从高到低选取的头部商品数（越多越慢、风控压力越大）。
-          1688 首次使用前，请点右上角「登录1688」完成扫码（两平台各自独立登录）。
+          1688 / 拼多多首次使用前，请点右上角对应「登录」完成扫码（各平台独立登录）。
+          拼多多为移动网页实验版，选择器可能随平台改版，失败时请查看日志。
         </div>
         {conservative && (
           <Alert
@@ -390,6 +413,35 @@ export default function CollectPanel() {
             </div>
           )}
             </>
+          )}
+          {report && ['done', 'failed'].includes(job.status) && (
+            <Alert
+              type={job.status === 'done' ? 'success' : 'warning'}
+              showIcon
+              style={{ marginTop: 12 }}
+              message={
+                job.status === 'done'
+                  ? '采集完成，已生成跨平台合并报告'
+                  : '采集已结束（部分平台可能失败），可导出已有数据'
+              }
+              description={
+                `${report.keyword} · ` +
+                report.platforms
+                  .map((p) => `${p.label} ${p.items} 条（详情 ${p.details}）`)
+                  .join(' + ') +
+                '。报告按平台分组，各平台销量口径不同，不做跨平台销量排名。'
+              }
+              action={
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  href={`/api/report?batch=${encodeURIComponent(job.batch || '')}&only_detail=0`}
+                >
+                  下载报告
+                </Button>
+              }
+            />
           )}
           {job.status === 'paused_captcha' && (
             <Alert

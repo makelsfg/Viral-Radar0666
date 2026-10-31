@@ -15,7 +15,7 @@ from ..jobs import BusyError, manager
 
 router = APIRouter()
 
-ALLOWED_PLATFORMS = {"tmall", "1688"}  # 拼多多实验版下一阶段接入
+ALLOWED_PLATFORMS = {"tmall", "1688", "pdd"}
 PLATFORM_LABELS = {"tmall": "天猫", "1688": "1688", "pdd": "拼多多"}
 
 
@@ -87,7 +87,7 @@ def collect(req: CollectRequest):
     if invalid:
         raise HTTPException(
             status_code=400,
-            detail=f"平台暂未接入：{', '.join(invalid)}（当前支持：天猫、1688）",
+            detail=f"平台暂未接入：{', '.join(invalid)}（当前支持：天猫、1688、拼多多）",
         )
 
     tasks = []

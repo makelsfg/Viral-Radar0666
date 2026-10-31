@@ -5,7 +5,7 @@ import tempfile
 from bkr import db
 from bkr.config import load_task, profile_dir_for
 from bkr.pace import get_pace
-from bkr.platforms import alibaba
+from bkr.platforms import alibaba, pinduoduo
 
 
 class _Task:
@@ -43,6 +43,29 @@ def test_alibaba_sold_variants():
         )
         assert card is not None
         assert card["sold_lb"] == want
+
+
+def test_pdd_normalize_card_sold_variants():
+    t = _Task()
+    for text, want in [
+        ("¥29.90\n已拼10万+件\n纯棉短袖T恤", 100000),
+        ("¥9.90\n已拼 300+ 件\n收纳盒", 300),
+        ("¥19.90\n已拼1.2万件\n保温杯", 12000),
+    ]:
+        card = pinduoduo.normalize_card(
+            {"item_id": "1", "title_attr": "纯棉短袖T恤", "text": text, "img": ""}, t
+        )
+        assert card is not None
+        assert card["sold_lb"] == want
+
+
+def test_pdd_price_filter():
+    t = _Task()
+    t.price_min = 50
+    card = pinduoduo.normalize_card(
+        {"item_id": "1", "title_attr": "保温杯", "text": "¥29.90\n已拼100+件", "img": ""}, t
+    )
+    assert card is None
 
 
 def test_alibaba_price_filter():

@@ -6,6 +6,7 @@ import type {
   JobState,
   ProductDetail,
   ProductRow,
+  ReportMeta,
   TaskInfo,
 } from './types'
 
@@ -28,7 +29,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   env: () => request<EnvStatus>('/api/env'),
-  login: (profile?: string | null, site: 'taobao' | '1688' = 'taobao') =>
+  login: (profile?: string | null, site: 'taobao' | '1688' | 'pdd' = 'taobao') =>
     request<JobState>('/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -49,6 +50,8 @@ export const api = {
       body: JSON.stringify({ platform: platform ?? null }),
     }),
   job: (jobId: string) => request<JobState>(`/api/jobs/${jobId}`),
+  reportMeta: (batch: string) =>
+    request<ReportMeta>(`/api/report/meta?batch=${encodeURIComponent(batch)}`),
   tasks: () => request<TaskInfo[]>('/api/tasks'),
   products: (taskId: string, batch: string, onlyDetail = true) =>
     request<ProductRow[]>(

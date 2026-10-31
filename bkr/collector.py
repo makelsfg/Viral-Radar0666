@@ -27,6 +27,10 @@ def _platform_adapters(platform: str):
         from .platforms import alibaba as adapter
 
         return adapter.collect_pages, adapter.open_search_page, adapter.click_and_extract
+    if platform == "pdd":
+        from .platforms import pinduoduo as adapter
+
+        return adapter.collect_pages, adapter.open_search_page, adapter.click_and_extract
     from .detail_collector import click_and_extract
     from .list_collector import collect_pages, open_search_page
 
@@ -219,7 +223,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
 
     try:
         with browser_runtime() as p:
-            ctx = launch_context(p)
+            ctx = launch_context(p, platform=task.platform)
             try:
                 row = db.get_batch(conn, batch, task.task_id) or {}
                 page_done = int(row.get("page_done") or 0)

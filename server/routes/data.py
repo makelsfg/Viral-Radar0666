@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import shutil
 from urllib.parse import quote
 
@@ -13,9 +14,46 @@ from fastapi.responses import StreamingResponse
 from bkr import db
 from bkr.config import RAW_DIR
 from bkr.parse import parse_price
-from ..utils import is_allowed_image_url, proxied_image
+from ..utils import fallback_product_url, image_referer, is_allowed_image_url, proxied_image
 
 router = APIRouter()
+
+PLATFORM_ORDER = {"tmall": 0, "1688": 1, "pdd": 2}
+PLATFORM_LABELS = {"tmall": "天猫", "1688": "1688", "pdd": "拼多多"}
+
+
+def _safe_filename(text: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|\s]+', "_", text or "").strip("_")
+    return cleaned or "report"
+
+
+def _keyword_for(conn, task_id: str, fallback: str = "") -> str:
+    row = conn.execute(
+        "SELECT keywords, name FROM dim_task WHERE task_id=?", (task_id,)
+    ).fetchone()
+    if not row:
+        return fallback or task_id
+    kws = _loads(row["keywords"], [])
+    if kws:
+        return str(kws[0])
+    return (row["name"] or fallback or task_id).split(" · ")[0]
+
+
+def _report_tasks(conn, batch: str) -> list[dict]:
+    rows = conn.execute(
+        """SELECT b.task_id, b.status, t.platform, t.name, t.keywords
+           FROM batch_run b
+           LEFT JOIN dim_task t ON t.task_id = b.task_id
+           WHERE b.batch=?""",
+        (batch,),
+    ).fetchall()
+    tasks = []
+    for r in rows:
+        d = dict(r)
+        if d.get("platform"):
+            tasks.append(d)
+    tasks.sort(key=lambda r: (PLATFORM_ORDER.get(r["platform"], 9), r["task_id"]))
+    return tasks
 
 
 def _loads(value, default):
@@ -129,7 +167,7 @@ def products(
                 "positive_rate": r["positive_rate"],
                 "rank": r["rank"],
                 "captured_at": r["captured_at"],
-                "product_url": r["product_url"] or f"https://detail.tmall.com/item.htm?id={r['item_id']}",
+                "product_url": r["product_url"] or fallback_product_url(r["platform"], r["item_id"]),
                 "params": _loads(r["params_json"], {}),
                 "skus": skus,
                 "sku_count": len(skus),
@@ -218,7 +256,7 @@ def delete_batch(task_id: str, batch: str):
 
 @router.get("/image")
 def image_proxy(url: str = Query(...)):
-    """1688 图片防盗链代理：只允许 alicdn.com 的 https 图片。"""
+    """本地图片代理：1688 / 拼多多 CDN 防盗链。"""
     if not is_allowed_image_url(url):
         raise HTTPException(status_code=400, detail="不允许的图片地址")
     try:
@@ -227,7 +265,7 @@ def image_proxy(url: str = Query(...)):
         resp = requests.get(
             url,
             headers={
-                "Referer": "https://detail.1688.com/",
+                "Referer": image_referer(url),
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -252,24 +290,116 @@ def export(task_id: str, batch: str, only_detail: int = 1):
     rows = products(task_id=task_id, batch=batch, only_detail=only_detail, proxy_images=0)
     buf = io.StringIO()
     writer = csv.writer(buf)
+    _write_header(writer)
+    for r in rows:
+        _write_row(writer, r)
+    content = "﻿" + buf.getvalue()
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            "SELECT platform FROM dim_task WHERE task_id=?", (task_id,)
+        ).fetchone()
+        keyword = _keyword_for(conn, task_id)
+    finally:
+        conn.close()
+    if row and row["platform"]:
+        platform = row["platform"]
+    elif rows:
+        platform = rows[0]["platform"]
+    else:
+        platform = "tmall"
+    label = PLATFORM_LABELS.get(platform, platform or "unknown")
+    filename = f"{_safe_filename(keyword)}_({label})_{batch}.csv"
+    return _csv_response(content, filename)
+
+
+def _write_header(writer) -> None:
     writer.writerow(
         ["平台", "item_id", "标题", "到手价", "已售", "加购", "店铺", "评分", "好评率",
          "SKU", "参数", "主图", "链接", "采集时间"]
     )
-    for r in rows:
-        writer.writerow(
-            [
-                r["platform"], r["item_id"], r["title"], r["price_final"],
-                r["sold_text"], r["cart_text"],
-                r["shop_name"], r["shop_rating"], r["positive_rate"],
-                " / ".join(r["skus"]), json.dumps(r["params"], ensure_ascii=False),
-                r["image_url"], r["product_url"], r["captured_at"],
-            ]
-        )
-    content = "﻿" + buf.getvalue()
-    filename = f"{task_id}_{batch}.csv"
+
+
+def _write_row(writer, r: dict) -> None:
+    writer.writerow(
+        [
+            r["platform"], r["item_id"], r["title"], r["price_final"],
+            r["sold_text"], r["cart_text"],
+            r["shop_name"], r["shop_rating"], r["positive_rate"],
+            " / ".join(r["skus"]), json.dumps(r["params"], ensure_ascii=False),
+            r["image_url"], r["product_url"], r["captured_at"],
+        ]
+    )
+
+
+def _csv_response(content: str, filename: str) -> StreamingResponse:
     return StreamingResponse(
         iter([content]),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )
+
+
+@router.get("/report")
+def report(batch: str, only_detail: int = 0):
+    """一次搜索的跨平台合并报告：同一批次的各平台商品汇总为一个 CSV。"""
+    conn = db.connect()
+    try:
+        tasks = _report_tasks(conn, batch)
+        if not tasks:
+            raise HTTPException(status_code=404, detail="该批次没有可导出的平台数据")
+        keyword = _keyword_for(conn, tasks[0]["task_id"])
+    finally:
+        conn.close()
+
+    rows: list[dict] = []
+    for t in tasks:
+        rows.extend(
+            products(task_id=t["task_id"], batch=batch, only_detail=only_detail, proxy_images=0)
+        )
+    if not rows:
+        raise HTTPException(status_code=404, detail="该批次没有商品数据（可能仍在采集中）")
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    _write_header(writer)
+    for r in rows:
+        _write_row(writer, r)
+    content = "﻿" + buf.getvalue()
+
+    labels = [PLATFORM_LABELS.get(t["platform"], t["platform"]) for t in tasks]
+    filename = f"{_safe_filename(keyword)}_({'+'.join(labels)})_{batch}.csv"
+    return _csv_response(content, filename)
+
+
+@router.get("/report/meta")
+def report_meta(batch: str):
+    """给前端展示用：本次报告包含哪些平台、各多少条数据。"""
+    conn = db.connect()
+    try:
+        tasks = _report_tasks(conn, batch)
+        if not tasks:
+            raise HTTPException(status_code=404, detail="该批次没有可导出的平台数据")
+        out = []
+        for t in tasks:
+            c = conn.execute(
+                """SELECT COUNT(*) AS n,
+                          SUM(CASE WHEN is_detail=1 THEN 1 ELSE 0 END) AS details
+                   FROM fact_snapshot WHERE task_id=? AND batch=?""",
+                (t["task_id"], batch),
+            ).fetchone()
+            out.append({
+                "task_id": t["task_id"],
+                "platform": t["platform"],
+                "label": PLATFORM_LABELS.get(t["platform"], t["platform"]),
+                "status": t["status"],
+                "items": int(c["n"] or 0),
+                "details": int(c["details"] or 0),
+            })
+        return {
+            "batch": batch,
+            "keyword": _keyword_for(conn, tasks[0]["task_id"]),
+            "platforms": out,
+        }
+    finally:
+        conn.close()

@@ -102,7 +102,20 @@ export interface PlatformRuntimeStatus {
 export interface EnvStatus {
   logged_in: boolean
   busy: boolean
-  profiles: { tmall: boolean; '1688': boolean }
+  profiles: { tmall: boolean; '1688': boolean; pdd: boolean }
+}
+
+export interface ReportMeta {
+  batch: string
+  keyword: string
+  platforms: {
+    task_id: string
+    platform: string
+    label: string
+    status: string
+    items: number
+    details: number
+  }[]
 }
 
 export interface HotwordKeyword {

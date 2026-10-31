@@ -64,6 +64,7 @@ def env():
         "profiles": {
             "tmall": status("tmall"),
             "1688": status("1688"),
+            "pdd": status("pdd"),
         },
     }
 

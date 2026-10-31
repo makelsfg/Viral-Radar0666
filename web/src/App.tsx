@@ -19,7 +19,7 @@ const { Header, Content } = Layout
 export default function App() {
   const { message } = AntApp.useApp()
   const [env, setEnv] = useState<EnvStatus | null>(null)
-  const [loginRunning, setLoginRunning] = useState<'tmall' | '1688' | null>(null)
+  const [loginRunning, setLoginRunning] = useState<'tmall' | '1688' | 'pdd' | null>(null)
   const loginRef = useRef<string | null>(null)
   const envRefreshRef = useRef(0)
 
@@ -57,7 +57,10 @@ export default function App() {
     }
   })
 
-  const startLogin = async (profile: 'tmall' | '1688', site: 'taobao' | '1688') => {
+  const startLogin = async (
+    profile: 'tmall' | '1688' | 'pdd',
+    site: 'taobao' | '1688' | 'pdd',
+  ) => {
     try {
       const job = await api.login(profile, site)
       loginRef.current = job.id
@@ -70,13 +73,14 @@ export default function App() {
 
   const tmallOk = !!env?.profiles?.tmall
   const aliOk = !!env?.profiles?.['1688']
+  const pddOk = !!env?.profiles?.pdd
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Header className="app-header">
         <div className="brand">
           爆款雷达
-          <span className="brand-sub">天猫 · 1688 · 选品分析</span>
+          <span className="brand-sub">天猫 · 1688 · 拼多多 · 选品分析</span>
         </div>
         <Space size="middle" wrap>
           <Space size={4}>
@@ -101,6 +105,18 @@ export default function App() {
               onClick={() => startLogin('1688', '1688')}
             >
               登录1688
+            </Button>
+          </Space>
+          <Space size={4}>
+            <Tag color={pddOk ? 'success' : 'warning'}>
+              拼多多 {pddOk ? '已登录' : '未登录'}
+            </Tag>
+            <Button
+              size="small"
+              loading={loginRunning === 'pdd'}
+              onClick={() => startLogin('pdd', 'pdd')}
+            >
+              登录拼多多
             </Button>
           </Space>
         </Space>

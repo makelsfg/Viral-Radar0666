@@ -262,6 +262,19 @@ export default function DataPanel() {
           >
             导出 CSV
           </Button>
+          <Button
+            icon={<DownloadOutlined />}
+            disabled={!batch}
+            href={
+              batch
+                ? `/api/report?batch=${encodeURIComponent(batch)}&only_detail=${
+                    onlyDetail ? 1 : 0
+                  }`
+                : undefined
+            }
+          >
+            合并报告
+          </Button>
         </Space>
       }
     >

@@ -12,7 +12,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from .browser import has_login_cookies
+from .browser import has_login_cookies, has_pdd_login_cookies
 from .config import profile_dir_for
 
 
@@ -25,7 +25,8 @@ def _query_names(db_path: Path) -> set[str]:
     try:
         rows = conn.execute(
             """SELECT name FROM Cookies
-               WHERE (host_key LIKE '%taobao.com' OR host_key LIKE '%1688.com')
+               WHERE (host_key LIKE '%taobao.com' OR host_key LIKE '%1688.com'
+                      OR host_key LIKE '%pinduoduo.com' OR host_key LIKE '%yangkeduo.com')
                  AND (expires_utc = 0 OR expires_utc > ?)""",
             (now_us,),
         ).fetchall()
@@ -73,6 +74,8 @@ def _authorized_from_names(platform: str, names: set[str]) -> bool:
         return has_login_cookies(names)
     if platform == "1688":
         return bool({"__cn_logon__", "_cn_"} & names)
+    if platform == "pdd":
+        return has_pdd_login_cookies(names)
     return False
 
 
@@ -106,4 +109,8 @@ def effective_authorized(platform: str) -> bool:
 
 
 def login_site(platform: str) -> str:
-    return "1688" if platform == "1688" else "taobao"
+    if platform == "1688":
+        return "1688"
+    if platform == "pdd":
+        return "pdd"
+    return "taobao"

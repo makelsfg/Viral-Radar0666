@@ -196,7 +196,8 @@ class JobManager:
         try:
             with browser_runtime() as p:
                 ctx = launch_context(
-                    p, profile_dir=profile_dir_for(platform), kill_stale=True
+                    p, profile_dir=profile_dir_for(platform), kill_stale=True,
+                    platform=platform,
                 )
                 try:
                     ok, reason = wait_for_login(ctx, login_site(platform))
@@ -223,7 +224,8 @@ class JobManager:
 
             with browser_runtime() as p:
                 ctx = launch_context(
-                    p, headless=True, profile_dir=profile_dir_for(platform), kill_stale=True
+                    p, headless=True, profile_dir=profile_dir_for(platform), kill_stale=True,
+                    platform=platform,
                 )
                 try:
                     ctx.storage_state(path=str(path))
@@ -480,7 +482,8 @@ class JobManager:
             pdir = profile_dir_for(profile)
 
             with browser_runtime() as p:
-                ctx = launch_context(p, profile_dir=pdir, kill_stale=True)
+                ctx = launch_context(p, profile_dir=pdir, kill_stale=True,
+                                 platform=(site if site == "pdd" else None))
                 try:
                     ok, reason = wait_for_login(ctx, site)
                     if ok:
