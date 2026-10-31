@@ -25,6 +25,7 @@ class CollectRequest(BaseModel):
     pages: int = Field(default=1, ge=1, le=10)
     detail_top: int = Field(default=6, ge=0, le=200)
     detail_order: str = Field(default="rank", pattern="^(rank|sold)$")
+    pace: str = Field(default="safe", pattern="^(safe|balanced|fast)$")
     mode: str = Field(default="standard", pattern="^(standard|conservative)$")
     price_min: float | None = Field(default=None, ge=0)
     price_max: float | None = Field(default=None, ge=0)
@@ -56,6 +57,7 @@ def _task_from_db(task_id: str) -> Task:
         name=r["name"],
         keywords=_loads(r["keywords"], [r["name"]]),
         platform=(r["platform"] if "platform" in r.keys() else "tmall") or "tmall",
+        pace=(r["pace"] if "pace" in r.keys() else "safe") or "safe",
         sort=r["sort"] or "sale-desc",
         pages=int(r["pages"] or 1),
         detail_top=int(r["detail_top"] or 6),
@@ -97,6 +99,7 @@ def collect(req: CollectRequest):
                 name=f"{keyword} · {label}",
                 keywords=[keyword],
                 platform=platform,
+                pace=req.pace,
                 pages=1 if req.mode == "conservative" else req.pages,
                 detail_top=0 if req.mode == "conservative" else req.detail_top,
                 detail_order=req.detail_order,

@@ -25,7 +25,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="爆款雷达", version="0.6.1", lifespan=lifespan)
+app = FastAPI(title="爆款雷达", version="0.7.0", lifespan=lifespan)
 
 app.include_router(events.router, prefix="/api")
 app.include_router(env.router, prefix="/api")

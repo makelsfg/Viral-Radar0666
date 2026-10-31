@@ -65,6 +65,7 @@ export interface JobState {
   task_index?: number
   task_total?: number
   platforms?: string[]
+  platforms_status?: PlatformRuntimeStatus[]
   message?: string | null
   error?: string | null
 }
@@ -72,6 +73,26 @@ export interface JobState {
 export interface SseEvent {
   type: 'job'
   job: JobState
+}
+
+export interface PlatformRuntimeStatus {
+  task_id: string
+  name: string
+  platform: string
+  status: string
+  stage: string
+  page_done: number
+  pages: number
+  items_count: number
+  detail_done: number
+  detail_total: number
+  error?: string | null
+}
+
+export interface EnvStatus {
+  logged_in: boolean
+  busy: boolean
+  profiles: { tmall: boolean; '1688': boolean }
 }
 
 export interface HotwordKeyword {

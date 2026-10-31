@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS dim_task (
   pages         INTEGER DEFAULT 2,
   detail_top    INTEGER DEFAULT 20,
   detail_order  TEXT DEFAULT 'rank',
+  pace          TEXT DEFAULT 'safe',
   price_min     REAL,
   price_max     REAL,
   exclude_words TEXT,
@@ -110,6 +111,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE dim_task ADD COLUMN detail_order TEXT DEFAULT 'rank'")
     if "platform" not in task_cols:
         conn.execute("ALTER TABLE dim_task ADD COLUMN platform TEXT DEFAULT 'tmall'")
+    if "pace" not in task_cols:
+        conn.execute("ALTER TABLE dim_task ADD COLUMN pace TEXT DEFAULT 'safe'")
 
     run_cols = {row[1] for row in conn.execute("PRAGMA table_info(batch_run)")}
     if "config_json" not in run_cols:
@@ -168,12 +171,12 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
 def upsert_task(conn, task) -> None:
     conn.execute(
         """INSERT INTO dim_task(task_id, platform, name, keywords, sort, pages, detail_top,
-                               detail_order, price_min, price_max, exclude_words, enabled, created_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,1,datetime('now'))
+                               detail_order, pace, price_min, price_max, exclude_words, enabled, created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,datetime('now'))
            ON CONFLICT(task_id) DO UPDATE SET
              platform=excluded.platform, name=excluded.name, keywords=excluded.keywords,
              sort=excluded.sort, pages=excluded.pages, detail_top=excluded.detail_top,
-             detail_order=excluded.detail_order,
+             detail_order=excluded.detail_order, pace=excluded.pace,
              price_min=excluded.price_min, price_max=excluded.price_max,
              exclude_words=excluded.exclude_words""",
         (
@@ -185,6 +188,7 @@ def upsert_task(conn, task) -> None:
             task.pages,
             task.detail_top,
             task.detail_order,
+            getattr(task, "pace", "safe"),
             task.price_min,
             task.price_max,
             json.dumps(task.exclude_words, ensure_ascii=False),

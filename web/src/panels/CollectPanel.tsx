@@ -84,6 +84,7 @@ export default function CollectPanel() {
         pages: values.pages ?? 1,
         detail_top: values.detail_top ?? 0,
         detail_order: values.detail_order ?? 'rank',
+        pace: values.pace ?? 'safe',
         mode: conservative ? 'conservative' : 'standard',
         price_min: values.price_min ?? null,
         price_max: values.price_max ?? null,
@@ -115,7 +116,9 @@ export default function CollectPanel() {
   const openLogin = async () => {
     setLoginRunning(true)
     try {
-      await api.login()
+      const profile = job?.task_platform === '1688' ? '1688' : 'tmall'
+      const site = profile === '1688' ? '1688' : 'taobao'
+      await api.login(profile, site)
       message.info('浏览器已打开，请完成扫码登录，然后点「继续采集」')
     } catch (e: any) {
       message.error(e.message || '打开登录失败')
@@ -163,6 +166,7 @@ export default function CollectPanel() {
             pages: 1,
             detail_top: 0,
             detail_order: 'rank',
+            pace: 'safe',
             platforms: ['tmall'],
           }}
           style={{ rowGap: 12 }}
@@ -202,6 +206,16 @@ export default function CollectPanel() {
               ]}
             />
           </Form.Item>
+          <Form.Item name="pace" label="节奏">
+            <Select
+              style={{ width: 110 }}
+              options={[
+                { value: 'safe', label: '安全' },
+                { value: 'balanced', label: '平衡' },
+                { value: 'fast', label: '快速' },
+              ]}
+            />
+          </Form.Item>
           <Form.Item name="price_min" label="价格下限">
             <InputNumber min={0} prefix="¥" style={{ width: 110 }} />
           </Form.Item>
@@ -219,7 +233,7 @@ export default function CollectPanel() {
         </Form>
         <div className="hint">
           每页约 40–60 个商品；详情样本数 = 进入详情页采集的头部商品数（越多越慢、风控压力越大）。
-          1688 首次使用前，请先在终端运行 <code>python -m bkr.cli login --site 1688</code> 完成登录。
+          1688 首次使用前，请点右上角「登录1688」完成扫码（两平台各自独立登录）。
         </div>
         {conservative && (
           <Alert
@@ -243,7 +257,48 @@ export default function CollectPanel() {
             <span className="hint">{job.message}</span>
           </Space>
 
-          {job.platforms && job.platforms.length > 1 && (
+          {job.platforms_status && job.platforms_status.length > 0 ? (
+            <div style={{ marginTop: 10 }}>
+              <span className="hint" style={{ marginRight: 8 }}>
+                平台执行状态（并行）：
+              </span>
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                {job.platforms_status.map((s) => {
+                  const stateText: Record<string, string> = {
+                    waiting: '等待',
+                    running: '采集中',
+                    paused_captcha: '待人工处理',
+                    failed: '失败',
+                    done: '已完成',
+                  }
+                  const color =
+                    s.status === 'done'
+                      ? 'success'
+                      : s.status === 'running'
+                        ? 'processing'
+                        : s.status === 'failed'
+                          ? 'error'
+                          : s.status === 'paused_captcha'
+                            ? 'warning'
+                            : 'default'
+                  return (
+                    <Space key={s.task_id} size={8} wrap>
+                      <Tag color={color}>{PLATFORM_LABELS[s.platform] || s.platform}</Tag>
+                      <span className="hint">{stateText[s.status] || s.status}</span>
+                      <span className="hint">
+                        列表 {s.page_done}/{s.pages} · 详情 {s.detail_done}/{s.detail_total} · 候选 {s.items_count}
+                      </span>
+                      {s.error && (
+                        <span className="hint" style={{ color: '#cf1322' }}>
+                          {s.error}
+                        </span>
+                      )}
+                    </Space>
+                  )
+                })}
+              </Space>
+            </div>
+          ) : job.platforms && job.platforms.length > 1 ? (
             <div style={{ marginTop: 10 }}>
               <span className="hint" style={{ marginRight: 8 }}>
                 平台队列（串行执行）：
@@ -264,20 +319,23 @@ export default function CollectPanel() {
                 })}
               </Space>
             </div>
+          ) : null}
+
+          {(!job.platforms_status || job.platforms_status.length <= 1) && (
+            <div style={{ marginTop: 16 }}>
+              <div className="hint">
+                搜索页 {job.page_done}/{job.pages}　候选商品 {job.items_count} 个
+              </div>
+              <Progress percent={pagesPercent} />
+              <div className="hint" style={{ marginTop: 8 }}>
+                商品详情 {job.detail_done}/{detailTarget || '—'}
+              </div>
+              <Progress
+                percent={detailPercent}
+                status={job.status === 'failed' ? 'exception' : undefined}
+              />
+            </div>
           )}
-          <div style={{ marginTop: 16 }}>
-            <div className="hint">
-              搜索页 {job.page_done}/{job.pages}　候选商品 {job.items_count} 个
-            </div>
-            <Progress percent={pagesPercent} />
-            <div className="hint" style={{ marginTop: 8 }}>
-              商品详情 {job.detail_done}/{detailTarget || '—'}
-            </div>
-            <Progress
-              percent={detailPercent}
-              status={job.status === 'failed' ? 'exception' : undefined}
-            />
-          </div>
           {job.status === 'paused_captcha' && (
             <Alert
               type="warning"

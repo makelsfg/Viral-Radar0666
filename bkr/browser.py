@@ -18,7 +18,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from .config import PROFILE_DIR, STATE_PATH
+from .config import PROFILE_DIR, STATE_PATH, profile_dir_for
 
 CDP_URL = (os.environ.get("BK_CDP_URL") or "").strip()
 CHANNEL = (os.environ.get("BK_BROWSER_CHANNEL") or "").strip()
@@ -111,12 +111,14 @@ def _kill_profile_browsers(profile: Path) -> None:
         pass
 
 
-def launch_context(p, headless: bool = False, kill_stale: bool = False):
+def launch_context(p, headless: bool = False, kill_stale: bool = False, profile_dir=None):
     """返回 BrowserContext。
 
+    profile_dir 可指定独立用户目录（并行时每平台一个）。
     启动顺序：Edge/Chrome(channel) -> 内置 Chromium(同一 profile) -> 内置 Chromium(独立回退 profile)。
     每次启动后用 new_page() 做健康检查，失败自动尝试下一种。
     """
+    base_profile = Path(profile_dir) if profile_dir is not None else PROFILE_DIR
     if CDP_URL:
         try:
             browser = p.chromium.connect_over_cdp(CDP_URL)
@@ -132,13 +134,13 @@ def launch_context(p, headless: bool = False, kill_stale: bool = False):
 
     attempts = []
     if CHANNEL:
-        attempts.append((f"{CHANNEL}", CHANNEL, PROFILE_DIR))
-        attempts.append(("内置 Chromium（同一 profile）", None, PROFILE_DIR))
+        attempts.append((f"{CHANNEL}", CHANNEL, base_profile))
+        attempts.append(("内置 Chromium（同一 profile）", None, base_profile))
         attempts.append(
-            ("内置 Chromium（回退 profile）", None, PROFILE_DIR.with_name(PROFILE_DIR.name + "-fallback"))
+            ("内置 Chromium（回退 profile）", None, base_profile.with_name(base_profile.name + "-fallback"))
         )
     else:
-        attempts.append(("内置 Chromium", None, PROFILE_DIR))
+        attempts.append(("内置 Chromium", None, base_profile))
 
     last_exc: Exception | None = None
     for label, channel, profile_dir in attempts:
@@ -270,19 +272,20 @@ def human_move(page, x: float, y: float) -> None:
         pass
 
 
-def login(site: str = "taobao") -> None:
-    """打开浏览器人工扫码登录（site=taobao/1688，共用同一个持久化 profile）。"""
+def login(site: str = "taobao", profile: str | None = None) -> None:
+    """打开浏览器人工扫码登录（site=taobao/1688；profile 可指定独立用户目录）。"""
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     site = (site or "taobao").strip().lower()
+    pdir = profile_dir_for(profile)
     if CDP_URL:
         print(f"CDP 模式：接管 {CDP_URL} 上的 Chrome（请确保已在该浏览器登录）")
     else:
-        print(f"当前浏览器 profile：{PROFILE_DIR}")
+        print(f"当前浏览器 profile：{pdir.name}")
     print(f"当前引擎：{engine_name()}    浏览器：{browser_channel()}")
 
     target = "https://www.1688.com" if site == "1688" else "https://www.taobao.com"
     with browser_runtime() as p:
-        ctx = launch_context(p)
+        ctx = launch_context(p, profile_dir=pdir)
         page = ctx.new_page()
         try:
             page.goto(target, wait_until="domcontentloaded")

@@ -11,6 +11,7 @@ import re
 from urllib.parse import quote
 
 from ..browser import BlockedError, check_blocked, human_move, polite_sleep
+from ..pace import get_pace
 from ..parse import parse_count, parse_price
 
 SEARCH_URL = "https://s.1688.com/selloffer/offer_search.htm?keywords={q}&beginPage={page}"
@@ -144,7 +145,8 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
             print(f"  1688 本页解析 {len(raws)} 张卡片，累计 {len(cards)} 个")
         finally:
             page.close()
-        polite_sleep(5.0, 9.0)
+        pace = get_pace(getattr(task, "pace", "safe"))
+        polite_sleep(pace["list_lo"], pace["list_hi"])
 
     seen, out = set(), []
     for c in cards:

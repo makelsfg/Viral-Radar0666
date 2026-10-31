@@ -3,7 +3,8 @@ import os
 import tempfile
 
 from bkr import db
-from bkr.config import load_task
+from bkr.config import load_task, profile_dir_for
+from bkr.pace import get_pace
 from bkr.platforms import alibaba
 
 
@@ -47,6 +48,19 @@ def test_task_platform_from_yaml():
         )
     task = load_task(path)
     assert task.platform == "1688"
+
+
+def test_pace_presets():
+    assert get_pace("safe")["detail_lo"] == 20
+    assert get_pace("balanced")["rest_every"] == 3
+    assert get_pace("fast")["detail_hi"] < get_pace("safe")["detail_hi"]
+    assert get_pace("unknown") == get_pace("safe")
+
+
+def test_profile_dir_for():
+    assert "tmall" in profile_dir_for("tmall").name
+    assert "1688" in profile_dir_for("1688").name
+    assert profile_dir_for("") == profile_dir_for(None)
 
 
 def test_product_platform_isolation():

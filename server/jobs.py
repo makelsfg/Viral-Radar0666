@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -10,7 +13,7 @@ from datetime import datetime
 
 from bkr import db
 from bkr.collector import run_task
-from bkr.config import Task
+from bkr.config import ROOT, Task, profile_dir_for
 
 
 class BusyError(RuntimeError):
@@ -112,11 +115,20 @@ class JobManager:
             task_platform=first.platform,
             batch=batch,
             platforms=[t.platform for t in tasks],
+            platforms_status=[
+                {
+                    "task_id": t.task_id, "name": t.name, "platform": t.platform,
+                    "status": "waiting", "stage": "waiting",
+                    "page_done": 0, "pages": t.pages, "items_count": 0,
+                    "detail_done": 0, "detail_total": t.detail_top, "error": None,
+                }
+                for t in tasks
+            ],
             task_index=1,
             task_total=len(tasks),
             pages=first.pages,
             detail_total=first.detail_top,
-            message="正在启动浏览器…",
+            message="正在启动采集…",
         )
         job["_task_ids"] = [t.task_id for t in tasks]
         self._publish(job)
@@ -126,86 +138,119 @@ class JobManager:
         return job
 
     def _run_collect_many(self, job: dict, tasks: list[Task], batch: str, resume: bool) -> None:
+        """并行编排：每个平台一个子进程 worker（独立 profile），错峰启动。"""
         stop = threading.Event()
+
+        def snapshot() -> list[dict]:
+            conn = db.connect()
+            try:
+                out = []
+                for t in tasks:
+                    row = db.get_batch(conn, batch, t.task_id) or {}
+                    status = row.get("status") or "waiting"
+                    if status not in ("running", "paused_captcha", "failed", "done"):
+                        status = "waiting"
+                    out.append({
+                        "task_id": t.task_id,
+                        "name": t.name,
+                        "platform": t.platform,
+                        "status": status,
+                        "stage": row.get("stage") or "waiting",
+                        "page_done": int(row.get("page_done") or 0),
+                        "pages": t.pages,
+                        "items_count": int(row.get("items_count") or 0),
+                        "detail_done": int(row.get("detail_done") or 0),
+                        "detail_total": t.detail_top,
+                        "error": row.get("error"),
+                    })
+                return out
+            finally:
+                conn.close()
+
+        def aggregate(statuses: list[dict]) -> str:
+            states = [s["status"] for s in statuses]
+            if any(s == "paused_captcha" for s in states):
+                return "paused_captcha"
+            if any(s in ("running", "waiting") for s in states):
+                return "running"
+            if any(s == "failed" for s in states):
+                return "failed"
+            if states and all(s == "done" for s in states):
+                return "done"
+            return "running"
+
+        def message(statuses: list[dict]) -> str:
+            names = {s["platform"]: s for s in statuses}
+            parts = []
+            for s in statuses:
+                label = s["name"].split(" · ")[-1] if " · " in s["name"] else s["name"]
+                st = s["status"]
+                if st == "running" and s["stage"] == "detail":
+                    parts.append(f"{label} 详情 {s['detail_done']}/{s['detail_total']}")
+                elif st == "running":
+                    parts.append(f"{label} 列表 {s['page_done']}/{s['pages']}")
+                else:
+                    parts.append(f"{label} " + {
+                        "waiting": "等待", "paused_captcha": "待人工处理",
+                        "failed": "失败", "done": "已完成",
+                    }.get(st, st))
+            return "；".join(parts)
+
+        def apply_statuses(statuses: list[dict]) -> None:
+            job["platforms_status"] = statuses
+            job["status"] = aggregate(statuses)
+            job["error"] = next((s["error"] for s in statuses if s["error"]), None)
+            job["message"] = message(statuses)
+            current = next(
+                (s for s in statuses if s["status"] in ("running", "paused_captcha")),
+                statuses[0] if statuses else None,
+            )
+            if current:
+                job.update(
+                    task_id=current["task_id"],
+                    task_name=current["name"],
+                    task_platform=current["platform"],
+                )
+            self._publish(job)
 
         def monitor() -> None:
             last = None
             while not stop.wait(2.0):
-                task_id = job.get("_current_task_id")
-                if not task_id:
-                    continue
-                snap = None
-                try:
-                    conn = db.connect()
-                    try:
-                        row = db.get_batch(conn, batch, task_id)
-                    finally:
-                        conn.close()
-                    if row:
-                        status = row.get("status")
-                        if status not in ("running", "paused_captcha", "failed", "done"):
-                            status = "running"
-                        snap = {
-                            "status": status,
-                            "stage": row.get("stage") or "start",
-                            "page_done": int(row.get("page_done") or 0),
-                            "items_count": int(row.get("items_count") or 0),
-                            "detail_done": int(row.get("detail_done") or 0),
-                            "error": row.get("error"),
-                        }
-                except Exception:
-                    snap = None
-                if snap and snap != last:
-                    last = snap
-                    job.update(snap)
-                    job["message"] = _progress_message(job)
-                    self._publish(job)
+                statuses = snapshot()
+                if statuses != last:
+                    last = statuses
+                    apply_statuses(statuses)
 
         mt = threading.Thread(target=monitor, daemon=True)
         mt.start()
+        procs: list[subprocess.Popen] = []
         try:
-            for idx, task in enumerate(tasks, 1):
-                job.update(
-                    task_id=task.task_id,
-                    task_name=task.name,
-                    task_platform=task.platform,
-                    task_index=idx,
-                    task_total=len(tasks),
-                    pages=task.pages,
-                    detail_total=task.detail_top,
-                    page_done=0,
-                    detail_done=0,
-                    items_count=0,
-                    stage="start",
-                    status="running",
-                    error=None,
-                    message=f"正在启动 {task.name} …",
-                )
-                job["_current_task_id"] = task.task_id
-                self._publish(job)
-                run_task(task, batch=batch, resume=resume)
-            job.update(status="done", stage="done", message="采集完成")
-        except SystemExit:
-            task_id = job.get("_current_task_id")
-            row = {}
-            try:
-                conn = db.connect()
-                try:
-                    row = db.get_batch(conn, batch, task_id) or {}
-                finally:
-                    conn.close()
-            except Exception:
-                pass
-            job["status"] = row.get("status") or "failed"
-            job["error"] = row.get("error")
-            job["message"] = row.get("error") or "采集中断"
-        except Exception as exc:  # noqa: BLE001
-            job["status"] = "failed"
-            job["error"] = f"{type(exc).__name__}: {exc}"
-            job["message"] = job["error"]
+            stagger = float(os.environ.get("BK_PARALLEL_STAGGER", "75"))
+            for idx, task in enumerate(tasks):
+                if idx > 0 and stagger > 0:
+                    print(f"[job] 错峰等待 {stagger:.0f}s 后启动 {task.name}")
+                    time.sleep(stagger)
+                env = os.environ.copy()
+                env["BK_PROFILE"] = task.platform
+                cmd = [
+                    sys.executable, "-m", "bkr.worker",
+                    "--task-id", task.task_id, "--batch", batch,
+                ]
+                if resume:
+                    cmd.append("--resume")
+                print(f"[job] 启动 worker：{task.name}（profile={task.platform}）")
+                procs.append(subprocess.Popen(cmd, cwd=str(ROOT), env=env))
+            for proc in procs:
+                proc.wait()
         finally:
             stop.set()
             mt.join(timeout=3)
+            statuses = snapshot()
+            apply_statuses(statuses)
+            if job["status"] == "running":
+                job["status"] = "failed"
+                job["error"] = job.get("error") or "worker 提前退出"
+                job["message"] = job["error"]
             job["finished_at"] = _now()
             self._publish(job)
             self._run_lock.release()
@@ -276,24 +321,36 @@ class JobManager:
 
     # ---------- 登录 ----------
 
-    def start_login(self) -> dict:
+    def start_login(self, profile: str | None = None, site: str = "taobao") -> dict:
         if not self._run_lock.acquire(blocking=False):
             raise BusyError("已有一个采集/登录任务在运行，请等待完成")
-        job = self._new_job(type="login", status="waiting", message="请在打开的浏览器里扫码登录")
+        job = self._new_job(
+            type="login",
+            status="waiting",
+            profile=profile,
+            site=site,
+            message="请在打开的浏览器里扫码登录",
+        )
         self._publish(job)
         threading.Thread(target=self._run_login, args=(job,), daemon=True).start()
         return job
 
     def _run_login(self, job: dict) -> None:
         try:
-            from bkr.browser import browser_runtime, close_context, launch_context
+            from bkr.browser import browser_runtime, close_context, has_login_cookies, launch_context
+
             from bkr.config import STATE_PATH
 
+            profile = job.get("profile")
+            site = job.get("site") or "taobao"
+            pdir = profile_dir_for(profile)
+            target = "https://www.1688.com" if site == "1688" else "https://www.taobao.com"
+
             with browser_runtime() as p:
-                ctx = launch_context(p)
+                ctx = launch_context(p, profile_dir=pdir)
                 page = ctx.new_page()
                 try:
-                    page.goto("https://www.taobao.com", wait_until="domcontentloaded")
+                    page.goto(target, wait_until="domcontentloaded")
                     deadline = time.time() + 300
                     logged = False
                     hits = 0
@@ -302,27 +359,29 @@ class JobManager:
                             names = {c.get("name") for c in ctx.cookies()}
                         except Exception:
                             break
-                        from bkr.browser import has_login_cookies
-
-                        if has_login_cookies(names):
+                        if site == "1688":
+                            ok = bool({"__cn_logon__", "_cn_", "cookie2"} & names)
+                        else:
+                            ok = has_login_cookies(names)
+                        if ok:
                             hits += 1
-                            if hits >= 2:  # 连续两次确认，避免半登录
+                            if hits >= 2:
                                 logged = True
                                 break
                         else:
                             hits = 0
                         time.sleep(2)
                     if logged:
-                        time.sleep(2)  # 等 cookie 落盘
+                        time.sleep(2)
                         try:
                             ctx.storage_state(path=str(STATE_PATH))
                         except Exception:
                             pass
                         job["status"] = "done"
-                        job["message"] = "登录成功"
+                        job["message"] = f"{site} 登录成功"
                     else:
                         job["status"] = "timeout"
-                        job["message"] = "5 分钟内未检测到完整登录（需 cookie2 + unb），请重试"
+                        job["message"] = f"5 分钟内未检测到完整登录（{site}），请重试"
                 finally:
                     try:
                         page.close()

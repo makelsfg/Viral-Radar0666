@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 from .browser import EmptyResultError, check_blocked, polite_sleep
 from .config import DATA_DIR
+from .pace import get_pace
 from .parse import canonical_url, extract_item_id, parse_price, parse_shop_name, parse_sold_text
 
 SEARCH_URL = "https://s.taobao.com/search?q={q}&tab={tab}&sort={sort}&page={page}"
@@ -179,7 +180,8 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
             print(f"  本页解析 {len(raws)} 张卡片，累计有效候选 {len(cards)} 个")
         finally:
             page.close()
-        polite_sleep(5.0, 9.0)
+        pace = get_pace(getattr(task, "pace", "safe"))
+        polite_sleep(pace["list_lo"], pace["list_hi"])
 
     seen = set()
     out = []

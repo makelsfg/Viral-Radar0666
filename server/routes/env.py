@@ -6,10 +6,11 @@ import sqlite3
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from bkr import __version__
 from bkr.browser import CDP_URL, browser_channel, engine_name, has_login_cookies
-from bkr.config import PROFILE_DIR
+from bkr.config import profile_dir_for
 
 from ..jobs import BusyError, manager
 
@@ -17,12 +18,39 @@ router = APIRouter()
 _STARTED_AT = datetime.now().isoformat(timespec="seconds")
 
 
+def _cookie_names(profile: str) -> set[str]:
+    candidates = [
+        profile_dir_for(profile) / "Default" / "Network" / "Cookies",
+        profile_dir_for(profile) / "Default" / "Cookies",
+    ]
+    cookie_file = next((p for p in candidates if p.exists()), None)
+    if cookie_file is None:
+        return set()
+    try:
+        conn = sqlite3.connect(cookie_file.as_uri() + "?mode=ro", uri=True)
+        try:
+            return {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM Cookies WHERE host_key LIKE '%taobao.com' OR host_key LIKE '%1688.com'"
+                ).fetchall()
+            }
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return set()
+
+
+def _is_1688_logged_in(names: set[str]) -> bool:
+    return bool({"__cn_logon__", "_cn_", "cookie2"} & names)
+
+
 @router.get("/health")
 def health():
     """版本探针：确认 8765 端口上跑的是不是最新后端，以及当前引擎/通道。"""
     return {
         "version": __version__,
-        "profile": PROFILE_DIR.name,
+        "profile": profile_dir_for("").name,
         "engine": engine_name(),
         "channel": browser_channel(),
         "cdp": bool(CDP_URL),
@@ -32,41 +60,30 @@ def health():
     }
 
 
-def is_logged_in() -> bool:
-    """读取持久化 profile 中的 cookie，判断淘宝登录态是否有效。"""
-    candidates = [
-        PROFILE_DIR / "Default" / "Network" / "Cookies",
-        PROFILE_DIR / "Default" / "Cookies",
-    ]
-    cookie_file = next((p for p in candidates if p.exists()), None)
-    if cookie_file is None:
-        return False
-    try:
-        # as_uri 会做百分号编码，兼容 Windows 中文路径
-        conn = sqlite3.connect(cookie_file.as_uri() + "?mode=ro", uri=True)
-        try:
-            names = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM Cookies WHERE host_key LIKE '%taobao.com'"
-                ).fetchall()
-            }
-        finally:
-            conn.close()
-        return has_login_cookies(names)
-    except sqlite3.Error:
-        return False
-
-
 @router.get("/env")
 def env():
-    return {"logged_in": is_logged_in(), "busy": manager.active()}
+    tmall_names = _cookie_names("tmall")
+    ali_names = _cookie_names("1688")
+    return {
+        "logged_in": has_login_cookies(tmall_names),
+        "busy": manager.active(),
+        "profiles": {
+            "tmall": has_login_cookies(tmall_names),
+            "1688": _is_1688_logged_in(ali_names),
+        },
+    }
+
+
+class LoginRequest(BaseModel):
+    profile: str | None = None
+    site: str = "taobao"
 
 
 @router.post("/login")
-def start_login():
+def start_login(req: LoginRequest | None = None):
+    req = req or LoginRequest()
     try:
-        return manager.start_login()
+        return manager.start_login(req.profile, req.site)
     except BusyError as e:
         raise HTTPException(status_code=409, detail=str(e))
 

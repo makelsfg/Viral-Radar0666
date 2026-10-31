@@ -17,6 +17,7 @@ from .browser import (
     launch_context,
 )
 from .config import RAW_DIR
+from .pace import get_pace
 from .parse import parse_price
 
 
@@ -105,7 +106,7 @@ def _enrich_with_apify(conn, task, batch: str, pending: list[dict], raw_dir) -> 
 
 def _collect_details_by_click(
     conn, ctx, task, batch: str, pending: list[dict], done_count: int, raw_dir,
-    open_search_page_fn, click_fn,
+    open_search_page_fn, click_fn, pace: dict,
 ) -> int:
     """本地通道：在搜索结果页点击进入详情，拟人节奏。返回已处理数量。"""
     by_page: dict[int, list] = {}
@@ -166,10 +167,10 @@ def _collect_details_by_click(
                 db.set_batch(conn, batch, task.task_id, stage="detail",
                              detail_done=done_count + processed)
 
-                # 拟人节奏：单个 20–40s；每 2 个额外休息 90–180s
-                pause = random.uniform(20.0, 40.0)
-                if processed % 2 == 0:
-                    pause += random.uniform(90.0, 180.0)
+                # 拟人节奏（按预设）：基础间隔 + 周期性休息
+                pause = random.uniform(pace["detail_lo"], pace["detail_hi"])
+                if processed % int(pace["rest_every"]) == 0:
+                    pause += random.uniform(pace["rest_lo"], pace["rest_hi"])
                     print(f"  （休息 {pause:.0f} 秒，模拟正常浏览节奏）")
                 time.sleep(pause)
         finally:
@@ -201,6 +202,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
             "pages": task.pages,
             "detail_top": task.detail_top,
             "detail_order": task.detail_order,
+            "pace": task.pace,
             "price_min": task.price_min,
             "price_max": task.price_max,
             "exclude_words": task.exclude_words,
@@ -222,7 +224,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
 
                 # 阶段一：搜索页
                 if page_done < task.pages:
-                    print(f"[{task.task_id}] 采集搜索页（{task.pages} 页，{task.platform}）")
+                    print(f"[{task.task_id}] 采集搜索页（{task.pages} 页，{task.platform}，节奏 {task.pace}）")
                     cards = collect_pages_fn(ctx, task, start_page=1)
                     stamp = datetime.now().isoformat(timespec="seconds")
                     for c in cards:
@@ -276,7 +278,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                     else:
                         _collect_details_by_click(
                             conn, ctx, task, batch, pending, done_count, raw_dir,
-                            open_search_page_fn, click_fn,
+                            open_search_page_fn, click_fn, get_pace(task.pace),
                         )
 
                 db.set_batch(

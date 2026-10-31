@@ -1,5 +1,6 @@
 import type {
   AnalysisSummary,
+  EnvStatus,
   HotwordKeyword,
   HotwordRow,
   JobState,
@@ -26,8 +27,13 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  env: () => request<{ logged_in: boolean; busy: boolean }>('/api/env'),
-  login: () => request<JobState>('/api/login', { method: 'POST' }),
+  env: () => request<EnvStatus>('/api/env'),
+  login: (profile?: string | null, site: 'taobao' | '1688' = 'taobao') =>
+    request<JobState>('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile: profile ?? null, site }),
+    }),
   collect: (body: unknown) =>
     request<JobState>('/api/collect', {
       method: 'POST',
