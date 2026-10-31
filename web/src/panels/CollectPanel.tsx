@@ -23,6 +23,7 @@ const STATUS_TEXT: Record<string, string> = {
   running: '采集中',
   waiting: '等待操作',
   paused_captcha: '等待人工验证',
+  auth_required: '等待登录',
   done: '已完成',
   failed: '失败',
   timeout: '超时',
@@ -31,6 +32,7 @@ const STATUS_COLOR: Record<string, string> = {
   running: 'processing',
   waiting: 'processing',
   paused_captcha: 'warning',
+  auth_required: 'warning',
   done: 'success',
   failed: 'error',
   timeout: 'warning',
@@ -95,7 +97,7 @@ export default function CollectPanel() {
       })
       jobRef.current = created.id
       setJob(created)
-      message.success('采集已开始：会弹出浏览器窗口，请不要关闭')
+      message.success('已开始：先检查登录状态，未授权平台会弹出登录窗口')
     } catch (e: any) {
       message.error(e.message || '启动采集失败')
     }
@@ -128,6 +130,19 @@ export default function CollectPanel() {
   }
 
   const needLogin = !!job?.error && job.error.includes('登录')
+  const showAuth = job?.phase === 'auth' || job?.status === 'auth_required'
+
+  const retryAuth = async (platform: string) => {
+    if (!job) return
+    try {
+      const created = await api.continueJob(job.id, platform)
+      jobRef.current = created.id
+      setJob(created)
+      message.info('正在打开登录窗口，请完成扫码')
+    } catch (e: any) {
+      message.error(e.message || '启动登录失败')
+    }
+  }
 
   const pagesPercent = job
     ? Math.min(100, Math.round((job.page_done / Math.max(job.pages, 1)) * 100))
@@ -257,6 +272,60 @@ export default function CollectPanel() {
             <span className="hint">{job.message}</span>
           </Space>
 
+          {showAuth ? (
+            <div style={{ marginTop: 10 }}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                {(job.auth_statuses || []).map((s) => {
+                  const text: Record<string, string> = {
+                    authorized: '已授权',
+                    logging_in: '等待扫码',
+                    unauthorized: '未授权',
+                    waiting: '待登录',
+                  }
+                  const color =
+                    s.status === 'authorized'
+                      ? 'success'
+                      : s.status === 'logging_in'
+                        ? 'processing'
+                        : s.status === 'unauthorized'
+                          ? 'error'
+                          : 'default'
+                  return (
+                    <Space key={s.platform} size={10} wrap>
+                      <Tag color={color}>{PLATFORM_LABELS[s.platform] || s.platform}</Tag>
+                      <span className="hint">
+                        {text[s.status] || s.status}
+                        {s.reason ? `（${s.reason}）` : ''}
+                      </span>
+                      {s.status !== 'authorized' && job.status === 'auth_required' && (
+                        <Button size="small" onClick={() => retryAuth(s.platform)}>
+                          重新登录
+                        </Button>
+                      )}
+                    </Space>
+                  )
+                })}
+              </Space>
+              {job.status === 'auth_required' ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginTop: 12 }}
+                  message="登录未完成，采集不会开始"
+                  description="请点击对应平台的「重新登录」，完成扫码后系统会自动开始采集。"
+                />
+              ) : (
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginTop: 12 }}
+                  message="登录检查中"
+                  description="请在弹出的浏览器窗口里完成扫码；登录成功后窗口会自动关闭。"
+                />
+              )}
+            </div>
+          ) : (
+            <>
           {job.platforms_status && job.platforms_status.length > 0 ? (
             <div style={{ marginTop: 10 }}>
               <span className="hint" style={{ marginRight: 8 }}>
@@ -335,6 +404,8 @@ export default function CollectPanel() {
                 status={job.status === 'failed' ? 'exception' : undefined}
               />
             </div>
+          )}
+            </>
           )}
           {job.status === 'paused_captcha' && (
             <Alert

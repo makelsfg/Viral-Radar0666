@@ -123,6 +123,30 @@ def job_status(job_id: str):
     return job
 
 
+class ContinueRequest(BaseModel):
+    platform: str | None = None
+
+
+@router.post("/jobs/{job_id}/continue")
+def continue_job(job_id: str, req: ContinueRequest | None = None):
+    """登录未完成时由用户重新发起：打开缺失平台登录窗口，全部授权后自动采集。"""
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.get("status") != "auth_required":
+        raise HTTPException(status_code=400, detail="当前任务不在等待登录状态")
+    platform = (req.platform if req else None) or None
+    if platform and platform not in ALLOWED_PLATFORMS:
+        raise HTTPException(status_code=400, detail=f"平台暂未接入：{platform}")
+    tasks = [_task_from_db(tid) for tid in (job.get("_task_ids") or [])]
+    if not tasks:
+        raise HTTPException(status_code=400, detail="任务配置缺失，请重新开始采集")
+    try:
+        return manager.start_run(tasks, job["batch"], auth_first=platform)
+    except BusyError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
 @router.post("/jobs/{job_id}/resume")
 def resume(job_id: str):
     job = manager.get(job_id)

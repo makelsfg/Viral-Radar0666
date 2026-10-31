@@ -57,6 +57,24 @@ def test_pace_presets():
     assert get_pace("unknown") == get_pace("safe")
 
 
+def test_auth_markers():
+    import bkr.auth as auth
+
+    old = auth.cookie_names
+    try:
+        auth.cookie_names = lambda p: (
+            {"cookie2", "unb"} if p == "tmall" else {"__cn_logon__"}
+        )
+        assert auth.is_authorized("tmall") is True
+        assert auth.is_authorized("1688") is True
+
+        auth.cookie_names = lambda p: {"cookie2", "tracknick"}
+        assert auth.is_authorized("tmall") is False
+        assert auth.is_authorized("1688") is False
+    finally:
+        auth.cookie_names = old
+
+
 def test_profile_dir_for():
     assert "tmall" in profile_dir_for("tmall").name
     assert "1688" in profile_dir_for("1688").name

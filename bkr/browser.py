@@ -272,6 +272,45 @@ def human_move(page, x: float, y: float) -> None:
         pass
 
 
+def wait_for_login(ctx, site: str = "taobao", timeout: int = 300, poll: float = 2.0):
+    """打开站点登录页并等待完整登录态。
+
+    返回 (ok, reason)：ok=True 表示连续两次检测到完整登录；
+    reason: ok / timeout / closed。
+    """
+    site = (site or "taobao").strip().lower()
+    target = "https://www.1688.com" if site == "1688" else "https://www.taobao.com"
+    page = ctx.new_page()
+    page.goto(target, wait_until="domcontentloaded")
+
+    hits = 0
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if page.is_closed():
+            return False, "closed"
+        try:
+            names = {c.get("name") for c in ctx.cookies()}
+        except Exception:
+            return False, "closed"
+        url = (page.url or "").lower()
+        on_login = any(
+            k in url for k in ("login.taobao.com", "login.tmall.com", "login.1688.com")
+        )
+        if site == "1688":
+            cookie_ok = bool({"__cn_logon__", "_cn_"} & names)
+        else:
+            cookie_ok = has_login_cookies(names)
+        if cookie_ok and not on_login:
+            hits += 1
+            if hits >= 2:
+                time.sleep(2)  # 等 cookie 落盘
+                return True, "ok"
+        else:
+            hits = 0
+        time.sleep(poll)
+    return False, "timeout"
+
+
 def login(site: str = "taobao", profile: str | None = None) -> None:
     """打开浏览器人工扫码登录（site=taobao/1688；profile 可指定独立用户目录）。"""
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)

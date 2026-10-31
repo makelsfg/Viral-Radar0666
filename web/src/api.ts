@@ -42,6 +42,12 @@ export const api = {
     }),
   resume: (jobId: string) =>
     request<JobState>(`/api/jobs/${jobId}/resume`, { method: 'POST' }),
+  continueJob: (jobId: string, platform?: string) =>
+    request<JobState>(`/api/jobs/${jobId}/continue`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform: platform ?? null }),
+    }),
   job: (jobId: string) => request<JobState>(`/api/jobs/${jobId}`),
   tasks: () => request<TaskInfo[]>('/api/tasks'),
   products: (taskId: string, batch: string, onlyDetail = true) =>

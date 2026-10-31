@@ -1,4 +1,4 @@
-"""后台任务管理：采集/登录线程、单会话锁、SSE 事件总线。"""
+"""后台任务：登录前置检查 + 并行采集 worker + SSE 事件。"""
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 
 from bkr import db
-from bkr.collector import run_task
+from bkr.auth import is_authorized, login_site
 from bkr.config import ROOT, Task, profile_dir_for
 
 
@@ -78,12 +78,15 @@ class JobManager:
         job = {
             "id": uuid.uuid4().hex[:10],
             "status": "running",
+            "phase": "auth",
             "stage": "start",
             "page_done": 0,
             "pages": 0,
             "items_count": 0,
             "detail_done": 0,
             "detail_total": 0,
+            "auth_statuses": [],
+            "platforms_status": [],
             "message": "",
             "error": None,
             "started_at": _now(),
@@ -97,12 +100,22 @@ class JobManager:
     def _publish(self, job: dict) -> None:
         bus.publish({"type": "job", "job": dict(job)})
 
-    # ---------- 采集 ----------
+    # ---------- 采集（登录前置） ----------
 
     def start_collect(self, task: Task, batch: str, resume: bool = False) -> dict:
-        return self.start_collect_many([task], batch, resume=resume)
+        return self.start_run([task], batch, resume=resume)
 
     def start_collect_many(self, tasks: list[Task], batch: str, resume: bool = False) -> dict:
+        return self.start_run(tasks, batch, resume=resume)
+
+    def start_run(
+        self,
+        tasks: list[Task],
+        batch: str,
+        resume: bool = False,
+        auth_first: str | None = None,
+    ) -> dict:
+        """创建一次运行：先登录检查，全部授权后才进入采集。"""
         if not tasks:
             raise BusyError("没有可采集的平台任务")
         if not self._run_lock.acquire(blocking=False):
@@ -110,11 +123,13 @@ class JobManager:
         first = tasks[0]
         job = self._new_job(
             type="collect",
+            phase="auth",
             task_id=first.task_id,
             task_name=first.name,
             task_platform=first.platform,
             batch=batch,
             platforms=[t.platform for t in tasks],
+            auth_statuses=[],
             platforms_status=[
                 {
                     "task_id": t.task_id, "name": t.name, "platform": t.platform,
@@ -128,17 +143,126 @@ class JobManager:
             task_total=len(tasks),
             pages=first.pages,
             detail_total=first.detail_top,
-            message="正在启动采集…",
+            message="登录检查中…",
         )
         job["_task_ids"] = [t.task_id for t in tasks]
         self._publish(job)
         threading.Thread(
-            target=self._run_collect_many, args=(job, tasks, batch, resume), daemon=True
+            target=self._run_job,
+            args=(job, tasks, batch, resume, auth_first),
+            daemon=True,
         ).start()
         return job
 
-    def _run_collect_many(self, job: dict, tasks: list[Task], batch: str, resume: bool) -> None:
-        """并行编排：每个平台一个子进程 worker（独立 profile），错峰启动。"""
+    def _auth_statuses(self, tasks: list[Task]) -> list[dict]:
+        out = []
+        for t in tasks:
+            ok = is_authorized(t.platform)
+            out.append({
+                "task_id": t.task_id,
+                "name": t.name,
+                "platform": t.platform,
+                "status": "authorized" if ok else "waiting",
+                "reason": None,
+            })
+        return out
+
+    def _set_auth(self, job: dict, platform: str, status: str, reason: str | None = None) -> None:
+        for s in job.get("auth_statuses") or []:
+            if s["platform"] == platform:
+                s["status"] = status
+                s["reason"] = reason
+                label = s["name"].split(" · ")[-1] if " · " in s["name"] else s["name"]
+                if status == "logging_in":
+                    job["message"] = f"正在打开{label}登录窗口，请扫码…"
+                elif status == "authorized":
+                    job["message"] = f"{label} 已授权"
+                elif status == "unauthorized":
+                    job["message"] = f"{label} 未授权：{reason or '请重新登录'}"
+        self._publish(job)
+
+    def _login_platform(self, platform: str) -> tuple[bool, str]:
+        """打开单平台登录窗口，等待登录完成（成功/关闭/超时）。"""
+        from bkr.browser import browser_runtime, close_context, launch_context, wait_for_login
+        from bkr.config import STATE_PATH
+
+        try:
+            with browser_runtime() as p:
+                ctx = launch_context(
+                    p, profile_dir=profile_dir_for(platform), kill_stale=True
+                )
+                try:
+                    ok, reason = wait_for_login(ctx, login_site(platform))
+                    if ok:
+                        try:
+                            ctx.storage_state(path=str(STATE_PATH))
+                        except Exception:
+                            pass
+                    return ok, reason
+                finally:
+                    close_context(ctx)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {exc}"
+
+    def _run_job(
+        self,
+        job: dict,
+        tasks: list[Task],
+        batch: str,
+        resume: bool,
+        auth_first: str | None,
+    ) -> None:
+        try:
+            job["auth_statuses"] = self._auth_statuses(tasks)
+            self._publish(job)
+
+            missing = [t for t in tasks if not is_authorized(t.platform)]
+            if auth_first:
+                missing.sort(key=lambda t: 0 if t.platform == auth_first else 1)
+
+            for task in missing:
+                if is_authorized(task.platform):
+                    self._set_auth(job, task.platform, "authorized")
+                    continue
+                self._set_auth(job, task.platform, "logging_in")
+                ok, reason = self._login_platform(task.platform)
+                if ok:
+                    self._set_auth(job, task.platform, "authorized")
+                else:
+                    msg = {"closed": "浏览器窗口被关闭", "timeout": "登录超时"}.get(
+                        reason, reason
+                    )
+                    self._set_auth(job, task.platform, "unauthorized", msg)
+                    break
+
+            job["auth_statuses"] = self._auth_statuses(tasks)
+            if not all(is_authorized(t.platform) for t in tasks):
+                pending = [
+                    s["name"].split(" · ")[-1]
+                    for s in job["auth_statuses"]
+                    if s["status"] != "authorized"
+                ]
+                job.update(
+                    phase="auth",
+                    status="auth_required",
+                    message="请完成登录后再继续：" + "、".join(pending),
+                )
+                self._publish(job)
+                return
+
+            job.update(phase="collect", status="running", message="登录完成，开始采集…")
+            self._publish(job)
+            self._collect_phase(job, tasks, batch, resume)
+        finally:
+            job["finished_at"] = _now()
+            self._publish(job)
+            self._run_lock.release()
+
+    def _collect_phase(
+        self, job: dict, tasks: list[Task], batch: str, resume: bool = False
+    ) -> None:
+        """并行 worker 采集阶段（调用方负责锁与 finished_at）。"""
+        job["phase"] = "collect"
         stop = threading.Event()
 
         def snapshot() -> list[dict]:
@@ -180,7 +304,6 @@ class JobManager:
             return "running"
 
         def message(statuses: list[dict]) -> str:
-            names = {s["platform"]: s for s in statuses}
             parts = []
             for s in statuses:
                 label = s["name"].split(" · ")[-1] if " · " in s["name"] else s["name"]
@@ -242,6 +365,10 @@ class JobManager:
                 procs.append(subprocess.Popen(cmd, cwd=str(ROOT), env=env))
             for proc in procs:
                 proc.wait()
+        except Exception as exc:  # noqa: BLE001
+            job["status"] = "failed"
+            job["error"] = f"{type(exc).__name__}: {exc}"
+            job["message"] = job["error"]
         finally:
             stop.set()
             mt.join(timeout=3)
@@ -251,81 +378,16 @@ class JobManager:
                 job["status"] = "failed"
                 job["error"] = job.get("error") or "worker 提前退出"
                 job["message"] = job["error"]
-            job["finished_at"] = _now()
             self._publish(job)
-            self._run_lock.release()
 
-    def _run_collect(self, job: dict, task: Task, batch: str, resume: bool) -> None:
-        stop = threading.Event()
-
-        def monitor() -> None:
-            last = None
-            while not stop.wait(2.0):
-                snap = None
-                try:
-                    conn = db.connect()
-                    try:
-                        row = db.get_batch(conn, batch, task.task_id)
-                    finally:
-                        conn.close()
-                    if row:
-                        status = row.get("status")
-                        if status not in ("running", "paused_captcha", "failed", "done"):
-                            status = "running"
-                        snap = {
-                            "status": status,
-                            "stage": row.get("stage") or "start",
-                            "page_done": int(row.get("page_done") or 0),
-                            "items_count": int(row.get("items_count") or 0),
-                            "detail_done": int(row.get("detail_done") or 0),
-                            "error": row.get("error"),
-                        }
-                except Exception:
-                    snap = None
-                if snap and snap != last:
-                    last = snap
-                    job.update(snap)
-                    job["message"] = _progress_message(job)
-                    self._publish(job)
-
-        mt = threading.Thread(target=monitor, daemon=True)
-        mt.start()
-        try:
-            run_task(task, batch=batch, resume=resume)
-            job["status"] = "done"
-            job["stage"] = "done"
-            job["message"] = "采集完成"
-        except SystemExit:
-            row = {}
-            try:
-                conn = db.connect()
-                try:
-                    row = db.get_batch(conn, batch, task.task_id) or {}
-                finally:
-                    conn.close()
-            except Exception:
-                pass
-            job["status"] = row.get("status") or "failed"
-            job["error"] = row.get("error")
-            job["message"] = row.get("error") or "采集中断"
-        except Exception as exc:  # noqa: BLE001
-            job["status"] = "failed"
-            job["error"] = f"{type(exc).__name__}: {exc}"
-            job["message"] = job["error"]
-        finally:
-            stop.set()
-            mt.join(timeout=3)
-            job["finished_at"] = _now()
-            self._publish(job)
-            self._run_lock.release()
-
-    # ---------- 登录 ----------
+    # ---------- 登录（账号管理 / 页面右上角按钮） ----------
 
     def start_login(self, profile: str | None = None, site: str = "taobao") -> dict:
         if not self._run_lock.acquire(blocking=False):
             raise BusyError("已有一个采集/登录任务在运行，请等待完成")
         job = self._new_job(
             type="login",
+            phase="login",
             status="waiting",
             profile=profile,
             site=site,
@@ -337,42 +399,18 @@ class JobManager:
 
     def _run_login(self, job: dict) -> None:
         try:
-            from bkr.browser import browser_runtime, close_context, has_login_cookies, launch_context
-
+            from bkr.browser import browser_runtime, close_context, launch_context, wait_for_login
             from bkr.config import STATE_PATH
 
             profile = job.get("profile")
             site = job.get("site") or "taobao"
             pdir = profile_dir_for(profile)
-            target = "https://www.1688.com" if site == "1688" else "https://www.taobao.com"
 
             with browser_runtime() as p:
-                ctx = launch_context(p, profile_dir=pdir)
-                page = ctx.new_page()
+                ctx = launch_context(p, profile_dir=pdir, kill_stale=True)
                 try:
-                    page.goto(target, wait_until="domcontentloaded")
-                    deadline = time.time() + 300
-                    logged = False
-                    hits = 0
-                    while time.time() < deadline:
-                        try:
-                            names = {c.get("name") for c in ctx.cookies()}
-                        except Exception:
-                            break
-                        if site == "1688":
-                            ok = bool({"__cn_logon__", "_cn_", "cookie2"} & names)
-                        else:
-                            ok = has_login_cookies(names)
-                        if ok:
-                            hits += 1
-                            if hits >= 2:
-                                logged = True
-                                break
-                        else:
-                            hits = 0
-                        time.sleep(2)
-                    if logged:
-                        time.sleep(2)
+                    ok, reason = wait_for_login(ctx, site)
+                    if ok:
                         try:
                             ctx.storage_state(path=str(STATE_PATH))
                         except Exception:
@@ -380,13 +418,12 @@ class JobManager:
                         job["status"] = "done"
                         job["message"] = f"{site} 登录成功"
                     else:
-                        job["status"] = "timeout"
-                        job["message"] = f"5 分钟内未检测到完整登录（{site}），请重试"
+                        job["status"] = "timeout" if reason == "timeout" else "failed"
+                        job["message"] = {
+                            "closed": f"{site} 登录窗口被关闭",
+                            "timeout": f"{site} 登录超时，请重试",
+                        }.get(reason, f"登录失败：{reason}")
                 finally:
-                    try:
-                        page.close()
-                    except Exception:
-                        pass
                     close_context(ctx)
         except Exception as exc:  # noqa: BLE001
             job["status"] = "failed"
@@ -396,25 +433,6 @@ class JobManager:
             job["finished_at"] = _now()
             self._publish(job)
             self._run_lock.release()
-
-
-def _progress_message(job: dict) -> str:
-    status = job.get("status")
-    prefix = ""
-    if int(job.get("task_total") or 1) > 1 and job.get("task_platform"):
-        prefix = f"[{job.get('task_platform')}] "
-    if status == "paused_captcha":
-        return prefix + "触发验证或登录失效：请在浏览器处理后点击「继续采集」"
-    if status == "failed":
-        return prefix + (job.get("error") or "采集失败")
-    if status == "done":
-        return prefix + "采集完成"
-    stage = job.get("stage")
-    if stage == "list":
-        return prefix + f"正在采集搜索结果（第 {job.get('page_done')}/{job.get('pages')} 页）"
-    if stage == "detail":
-        return prefix + f"正在采集商品详情（{job.get('detail_done')}/{job.get('detail_total')}）"
-    return prefix + "采集中…"
 
 
 manager = JobManager()

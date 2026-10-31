@@ -9,7 +9,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from bkr import __version__
-from bkr.browser import CDP_URL, browser_channel, engine_name, has_login_cookies
+from bkr.auth import cookie_names, is_authorized
+from bkr.browser import CDP_URL, browser_channel, engine_name
 from bkr.config import profile_dir_for
 
 from ..jobs import BusyError, manager
@@ -19,30 +20,11 @@ _STARTED_AT = datetime.now().isoformat(timespec="seconds")
 
 
 def _cookie_names(profile: str) -> set[str]:
-    candidates = [
-        profile_dir_for(profile) / "Default" / "Network" / "Cookies",
-        profile_dir_for(profile) / "Default" / "Cookies",
-    ]
-    cookie_file = next((p for p in candidates if p.exists()), None)
-    if cookie_file is None:
-        return set()
-    try:
-        conn = sqlite3.connect(cookie_file.as_uri() + "?mode=ro", uri=True)
-        try:
-            return {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM Cookies WHERE host_key LIKE '%taobao.com' OR host_key LIKE '%1688.com'"
-                ).fetchall()
-            }
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        return set()
+    return cookie_names(profile)
 
 
 def _is_1688_logged_in(names: set[str]) -> bool:
-    return bool({"__cn_logon__", "_cn_", "cookie2"} & names)
+    return bool({"__cn_logon__", "_cn_"} & names)
 
 
 @router.get("/health")
@@ -62,14 +44,12 @@ def health():
 
 @router.get("/env")
 def env():
-    tmall_names = _cookie_names("tmall")
-    ali_names = _cookie_names("1688")
     return {
-        "logged_in": has_login_cookies(tmall_names),
+        "logged_in": is_authorized("tmall"),
         "busy": manager.active(),
         "profiles": {
-            "tmall": has_login_cookies(tmall_names),
-            "1688": _is_1688_logged_in(ali_names),
+            "tmall": is_authorized("tmall"),
+            "1688": is_authorized("1688"),
         },
     }
 

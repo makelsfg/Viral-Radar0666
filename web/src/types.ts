@@ -48,9 +48,19 @@ export interface ProductDetail {
   }>
 }
 
+export interface AuthStatus {
+  task_id: string
+  name: string
+  platform: string
+  status: string
+  reason?: string | null
+}
+
 export interface JobState {
   id: string
   type: 'collect' | 'login'
+  phase?: 'auth' | 'collect' | 'login'
+  auth_statuses?: AuthStatus[]
   status: string
   stage: string | null
   page_done: number
