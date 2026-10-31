@@ -383,6 +383,8 @@ class JobManager:
                 env = os.environ.copy()
                 env["BK_PROFILE"] = task.platform
                 env["PYTHONUNBUFFERED"] = "1"
+                env["PYTHONIOENCODING"] = "utf-8"
+                env["PYTHONUTF8"] = "1"
                 cmd = [
                     sys.executable, "-m", "bkr.worker",
                     "--task-id", task.task_id, "--batch", batch,

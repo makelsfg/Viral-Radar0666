@@ -268,7 +268,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                         today_details = 0
                     if today_details >= 10:
                         print(
-                            f"⚠ 今日已采集详情 {today_details} 个，建议降低频率；"
+                            f"[提示] 今日已采集详情 {today_details} 个，建议降低频率；"
                             "同类目连续采详情是触发风控的主要来源。"
                         )
 
@@ -286,7 +286,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                     status="done", stage="done",
                     finished_at=datetime.now().isoformat(timespec="seconds"),
                 )
-                print(f"[{task.task_id}] 批次 {batch} 完成 ✅（详情 {len(pending)} 个）")
+                print(f"[{task.task_id}] 批次 {batch} 完成（详情 {len(pending)} 个）")
             finally:
                 close_context(ctx)
     except EmptyResultError as e:

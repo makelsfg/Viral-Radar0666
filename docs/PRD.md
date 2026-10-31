@@ -32,6 +32,8 @@
 > v0.8.1（2026-10-31）：修复登录态与平台细节：① cookie 读取在 Edge 锁库时改用临时副本（修复"刚登录却显示未登录"）；② 登录成功按平台保存 storage_state，采集 worker 启动时补充注入缺失 cookie（解决 session cookie 不恢复）；③ 授权但无 state 的平台自动 headless 导出；④ 1688 搜索关键词改 GBK 编码（修复乱码）；⑤ 关闭登录窗口自带 about:blank；⑥ 采集事件触发页面顶部账号状态刷新。
 >
 > v0.8.2（2026-10-31）：修复并行采集崩溃：Edge 在关闭最后一个标签页时退出浏览器，导致列表阶段结束后 worker 详情阶段 `TargetClosedError`。现在每个会话保留一个 keep-alive 标签页（标题"请勿关闭"）；worker 增加通用异常捕获（异常写入 batch_run 并打印 traceback）；每个平台输出独立日志 `data/logs/{batch}_{platform}.log`；worker 异常退出时父任务把仍为 running 的平台标记失败并附日志路径。1688 关键词 GBK、cookie 锁修复保留。
+>
+> v0.8.3（2026-10-31）：修复 Windows 子进程日志编码：worker 强制 `PYTHONIOENCODING=utf-8` / `PYTHONUTF8=1`，日志中的 emoji 符号（⚠/✅）替换为 `[提示]/[完成]`，避免 GBK 编码异常导致 worker 崩溃。
 
 ---
 

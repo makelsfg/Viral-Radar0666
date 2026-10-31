@@ -371,7 +371,7 @@ def login(site: str = "taobao", profile: str | None = None) -> None:
         try:
             page.goto(target, wait_until="domcontentloaded")
             print(f"请在弹出的浏览器窗口里完成 {site} 登录（扫码即可）。")
-            print("⚠️ 登录完成后【不要关闭浏览器窗口】，直接回到终端按回车。")
+            print("[注意] 登录完成后【不要关闭浏览器窗口】，直接回到终端按回车。")
             input()
 
             logged_in = False
