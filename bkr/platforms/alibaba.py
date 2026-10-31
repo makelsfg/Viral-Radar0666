@@ -17,6 +17,12 @@ from ..parse import parse_count, parse_price
 SEARCH_URL = "https://s.1688.com/selloffer/offer_search.htm?keywords={q}&beginPage={page}"
 DETAIL_URL = "https://detail.1688.com/offer/{iid}.html"
 
+# 1688 没有独立的“销量排序”，最接近的是“成交额”排序（近30天成交），
+# 与天猫 sale-desc 的口径方向一致。URL 参数值取自 1688 搜索页排序页签。
+# 注意：此参数未经实机登录态验证，若首跑后发现排序页签未落在“成交额”，
+# 修改这里的值即可（候选值：va_rmdarkgmv / va_darkgmv）。
+SORT_PARAM = "va_rmdarkgmv"
+
 JS_CARDS = r"""
 () => {
   const out = [], seen = new Set();
@@ -45,7 +51,9 @@ _BAD_TITLE = ("¥", "￥", "成交", "起批", "件起订", "发货", "广告", 
 _SHOP_RE = re.compile(
     r"([一-龥A-Za-z0-9（）()]{2,26}(?:有限公司|有限责任公司|工厂|厂|商行|经营部|旗舰店|专营店|专卖店|店))"
 )
-_SOLD_RE = re.compile(r"成交\s*([\d.]+[万wW千kK]?\+?)\s*笔")
+# 1688 的销量文案有多种形态：列表卡片常见“成交 100+ 件”，详情页是
+# “已售 8000+ 个”（三个相邻 span 拼出）或“成交 500 笔”。单位和前缀都放宽。
+_SOLD_RE = re.compile(r"(?:成交|已售|销量)\s*([\d.]+[万wW千kK]?\+?)\s*(?:笔|件|个|单)?")
 
 
 def _pick_title(raw: dict) -> str:
@@ -101,7 +109,10 @@ def _quote_keyword(keyword: str) -> str:
 
 
 def search_url(task, pageno: int) -> str:
-    return SEARCH_URL.format(q=_quote_keyword(task.keywords[0]), page=pageno)
+    url = SEARCH_URL.format(q=_quote_keyword(task.keywords[0]), page=pageno)
+    if (getattr(task, "sort", "") or "") == "sale-desc":
+        url += f"&sortType={SORT_PARAM}"
+    return url
 
 
 def open_search_page(ctx, task, pageno: int):
@@ -170,7 +181,22 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
 JS_DETAIL = r"""
 () => {
   const out = {};
-  const titleEl = document.querySelector('h1') || document.querySelector('[class*="title"]');
+  // 1688 详情页有多个 h1：第一个往往是卖家公司名（如“XX有限公司”），
+  // 真正的商品标题在 .title-content 容器里的 h1。优先取后者；
+  // 兜底时跳过公司名形态的 h1。
+  const companyRe = /(有限公司|有限责任公司|工厂|商行|经营部|公司)$/;
+  const pickTitle = () => {
+    const direct = document.querySelector('.title-content h1')
+      || document.querySelector('[class*="title-content"] h1');
+    if (direct && (direct.innerText || '').trim()) return direct;
+    const hs = Array.from(document.querySelectorAll('h1'));
+    for (const h of hs) {
+      const t = (h.innerText || '').trim();
+      if (t.length >= 8 && !companyRe.test(t)) return h;
+    }
+    return hs[0] || document.querySelector('[class*="title"]');
+  };
+  const titleEl = pickTitle();
   out.title = titleEl ? (titleEl.innerText || '').trim().split('\n')[0]
                       : ((document.title || '').split('-')[0] || '').trim();
 

@@ -22,15 +22,53 @@ from .parse import parse_price
 
 
 def _platform_adapters(platform: str):
-    """返回 (collect_pages, open_search_page, click_and_extract)。"""
+    """返回 (collect_pages, open_search_page, click_and_extract, search_url)。"""
     if platform == "1688":
         from .platforms import alibaba as adapter
 
-        return adapter.collect_pages, adapter.open_search_page, adapter.click_and_extract
+        return (
+            adapter.collect_pages,
+            adapter.open_search_page,
+            adapter.click_and_extract,
+            adapter.search_url,
+        )
     from .detail_collector import click_and_extract
-    from .list_collector import collect_pages, open_search_page
+    from .list_collector import collect_pages, open_search_page, search_url
 
-    return collect_pages, open_search_page, click_and_extract
+    return collect_pages, open_search_page, click_and_extract, search_url
+
+
+_PAGE_MATCH_KEYS = ("q", "keywords", "page", "beginPage", "tab", "sort", "sortType")
+
+
+def _same_search_url(a: str, b: str) -> bool:
+    """宽松比较两个搜索页 URL：同域名 + 目标 URL 里出现的每个关键参数都一致。"""
+    from urllib.parse import parse_qs, urlparse
+
+    try:
+        ua, ub = urlparse(a or ""), urlparse(b or "")
+    except ValueError:
+        return False
+    if not ua.netloc or ua.netloc != ub.netloc:
+        return False
+    qa, qb = parse_qs(ua.query), parse_qs(ub.query)
+    for k in _PAGE_MATCH_KEYS:
+        if k in qb and qa.get(k) != qb.get(k):
+            return False
+    return True
+
+
+def _find_open_search_page(ctx, target_url: str):
+    """查找当前会话里已打开的、与目标 URL 匹配的搜索页；没有则返回 None。"""
+    for pg in list(ctx.pages):
+        try:
+            if pg.is_closed():
+                continue
+            if _same_search_url(pg.url, target_url):
+                return pg
+        except Exception:
+            continue
+    return None
 
 
 def batch_id(now: datetime | None = None) -> str:
@@ -106,7 +144,7 @@ def _enrich_with_apify(conn, task, batch: str, pending: list[dict], raw_dir) -> 
 
 def _collect_details_by_click(
     conn, ctx, task, batch: str, pending: list[dict], done_count: int, raw_dir,
-    open_search_page_fn, click_fn, pace: dict,
+    open_search_page_fn, click_fn, pace: dict, search_url_fn=None,
 ) -> int:
     """本地通道：在搜索结果页点击进入详情，拟人节奏。返回已处理数量。"""
     by_page: dict[int, list] = {}
@@ -116,8 +154,32 @@ def _collect_details_by_click(
     processed = 0
     for pageno in sorted(by_page):
         items = by_page[pageno]
-        print(f"  打开搜索结果第 {pageno} 页，准备点击进入 {len(items)} 个详情（当前标签数 {len(ctx.pages)}）")
-        list_page = open_search_page_fn(ctx, task, pageno)
+        list_page = None
+        if search_url_fn is not None:
+            try:
+                list_page = _find_open_search_page(ctx, search_url_fn(task, pageno))
+            except Exception:
+                list_page = None
+            # 复用前确认页面仍然有效且带着商品链接，否则退回新开
+            if list_page is not None:
+                try:
+                    alive = list_page.evaluate(
+                        """() => document.querySelectorAll(
+                            'a[href*="item.htm"], a[href*="/offer/"]').length > 0"""
+                    )
+                except Exception:
+                    alive = False
+                if not alive:
+                    list_page = None
+        if list_page is not None:
+            print(f"  复用已打开的搜索结果第 {pageno} 页（当前标签数 {len(ctx.pages)}）")
+            try:
+                list_page.bring_to_front()
+            except Exception:
+                pass
+        else:
+            print(f"  打开搜索结果第 {pageno} 页，准备点击进入 {len(items)} 个详情（当前标签数 {len(ctx.pages)}）")
+            list_page = open_search_page_fn(ctx, task, pageno)
         try:
             # 先像真人一样随意浏览一会儿列表，再开始点
             for _ in range(random.randint(2, 4)):
@@ -162,7 +224,13 @@ def _collect_details_by_click(
                     "updated_at": datetime.now().isoformat(timespec="seconds"),
                     "first_seen_at": datetime.now().isoformat(timespec="seconds"),
                 })
-                db.set_snapshot_detail(conn, task.task_id, iid, batch, price_final)
+                db.set_snapshot_detail(
+                    conn, task.task_id, iid, batch, price_final,
+                    cart_text=detail.get("cart_text"),
+                    cart_lb=detail.get("cart_lb"),
+                    sold_text=detail.get("sold_text"),
+                    sold_lb=detail.get("sold_lb"),
+                )
                 processed += 1
                 db.set_batch(conn, batch, task.task_id, stage="detail",
                              detail_done=done_count + processed)
@@ -211,7 +279,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
     raw_dir = RAW_DIR / batch / task.platform
     raw_dir.mkdir(parents=True, exist_ok=True)
 
-    collect_pages_fn, open_search_page_fn, click_fn = _platform_adapters(task.platform)
+    collect_pages_fn, open_search_page_fn, click_fn, search_url_fn = _platform_adapters(task.platform)
 
     try:
         with browser_runtime() as p:
@@ -277,6 +345,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                         _collect_details_by_click(
                             conn, ctx, task, batch, pending, done_count, raw_dir,
                             open_search_page_fn, click_fn, get_pace(task.pace),
+                            search_url_fn=search_url_fn,
                         )
 
                 db.set_batch(

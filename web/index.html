@@ -3,6 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 1688 图片 CDN（cbu01.alicdn.com）会拒绝 Referer 为 127.0.0.1 的请求（403），
+         全局不发送 Referer 即可正常加载，天猫图片不受影响。 -->
+    <meta name="referrer" content="no-referrer" />
     <title>爆款雷达 · 天猫品类采集</title>
   </head>
   <body>

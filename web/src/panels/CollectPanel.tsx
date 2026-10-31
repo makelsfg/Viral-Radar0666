@@ -85,7 +85,6 @@ export default function CollectPanel() {
             : ['tmall'],
         pages: values.pages ?? 1,
         detail_top: values.detail_top ?? 0,
-        detail_order: values.detail_order ?? 'rank',
         pace: values.pace ?? 'safe',
         mode: conservative ? 'conservative' : 'standard',
         price_min: values.price_min ?? null,
@@ -180,7 +179,6 @@ export default function CollectPanel() {
           initialValues={{
             pages: 1,
             detail_top: 0,
-            detail_order: 'rank',
             pace: 'safe',
             platforms: ['tmall'],
           }}
@@ -211,15 +209,6 @@ export default function CollectPanel() {
           </Form.Item>
           <Form.Item name="detail_top" label="详情样本数">
             <InputNumber min={0} max={200} disabled={conservative} />
-          </Form.Item>
-          <Form.Item name="detail_order" label="详情顺序">
-            <Select
-              style={{ width: 150 }}
-              options={[
-                { value: 'rank', label: '页面顺序（拟人）' },
-                { value: 'sold', label: '已售优先' },
-              ]}
-            />
           </Form.Item>
           <Form.Item name="pace" label="节奏">
             <Select
