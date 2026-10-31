@@ -13,7 +13,7 @@ from datetime import datetime
 
 from bkr import db
 from bkr.auth import is_authorized, login_site
-from bkr.config import ROOT, Task, profile_dir_for, state_path_for
+from bkr.config import DATA_DIR, ROOT, Task, profile_dir_for, state_path_for
 
 
 class BusyError(RuntimeError):
@@ -370,7 +370,10 @@ class JobManager:
 
         mt = threading.Thread(target=monitor, daemon=True)
         mt.start()
-        procs: list[subprocess.Popen] = []
+        procs: list[tuple[subprocess.Popen, object, str]] = []
+        logs_dir = DATA_DIR / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        task_logs: dict[str, str] = {}
         try:
             stagger = float(os.environ.get("BK_PARALLEL_STAGGER", "75"))
             for idx, task in enumerate(tasks):
@@ -379,23 +382,51 @@ class JobManager:
                     time.sleep(stagger)
                 env = os.environ.copy()
                 env["BK_PROFILE"] = task.platform
+                env["PYTHONUNBUFFERED"] = "1"
                 cmd = [
                     sys.executable, "-m", "bkr.worker",
                     "--task-id", task.task_id, "--batch", batch,
                 ]
                 if resume:
                     cmd.append("--resume")
-                print(f"[job] 启动 worker：{task.name}（profile={task.platform}）")
-                procs.append(subprocess.Popen(cmd, cwd=str(ROOT), env=env))
-            for proc in procs:
+                log_path = logs_dir / f"{batch}_{task.platform}.log"
+                log_fh = open(log_path, "w", encoding="utf-8")
+                task_logs[task.task_id] = str(log_path)
+                print(f"[job] 启动 worker：{task.name}（profile={task.platform}，日志 {log_path}）")
+                procs.append((subprocess.Popen(cmd, cwd=str(ROOT), env=env,
+                                               stdout=log_fh, stderr=subprocess.STDOUT), log_fh, str(log_path)))
+            for proc, fh, _ in procs:
                 proc.wait()
+                try:
+                    fh.close()
+                except Exception:
+                    pass
         except Exception as exc:  # noqa: BLE001
             job["status"] = "failed"
             job["error"] = f"{type(exc).__name__}: {exc}"
             job["message"] = job["error"]
         finally:
+            for _, fh, _ in procs:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
             stop.set()
             mt.join(timeout=3)
+            statuses = snapshot()
+            # worker 异常退出但没写状态时，把仍为 running 的任务标记失败（带日志路径）
+            conn = db.connect()
+            try:
+                for s in statuses:
+                    if s["status"] == "running":
+                        log_path = task_logs.get(s["task_id"], "")
+                        db.set_batch(
+                            conn, batch, s["task_id"], status="failed",
+                            error=f"worker 异常退出（详见日志 {log_path}）",
+                        )
+                conn.commit()
+            finally:
+                conn.close()
             statuses = snapshot()
             apply_statuses(statuses)
             if job["status"] == "running":

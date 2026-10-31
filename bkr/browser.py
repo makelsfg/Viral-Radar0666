@@ -185,11 +185,26 @@ def launch_context(p, headless: bool = False, kill_stale: bool = False, profile_
                         )
                 except Exception as exc:
                     print(f"[browser] 登录态注入失败：{exc}")
-            # 关闭持久化 context 自带的 about:blank 空白页
+            # 保留一个 keep-alive 标签页：Edge/Chrome 在关闭最后一个标签时会退出整个浏览器，
+# 采集中会反复打开/关闭工作标签页，必须留一个常驻页撑住会话。
             try:
+                keeper = None
                 for pg in list(ctx.pages):
                     if (pg.url or "") in ("about:blank", ""):
-                        pg.close()
+                        if keeper is None:
+                            keeper = pg
+                        else:
+                            pg.close()
+                if keeper is None:
+                    keeper = ctx.new_page()
+                try:
+                    keeper.goto(
+                        "data:text/html,<title>爆款雷达 · 采集会话（请勿关闭）</title>"
+                        "<body style='font-family:system-ui;padding:40px;color:#666'>"
+                        "采集会话运行中，请勿关闭此窗口。</body>"
+                    )
+                except Exception:
+                    pass
             except Exception:
                 pass
             try:

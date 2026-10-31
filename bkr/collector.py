@@ -217,7 +217,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
 
     try:
         with browser_runtime() as p:
-            ctx = launch_context(p, kill_stale=True)
+            ctx = launch_context(p)
             try:
                 row = db.get_batch(conn, batch, task.task_id) or {}
                 page_done = int(row.get("page_done") or 0)
@@ -307,4 +307,16 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
     except RuntimeError as e:
         db.set_batch(conn, batch, task.task_id, status="failed", error=str(e))
         print(f"\n[{task.task_id}] 采集失败：{e}")
+        raise SystemExit(1)
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+
+        tb = traceback.format_exc()
+        print(tb)
+        msg = f"{type(exc).__name__}: {exc}"
+        try:
+            db.set_batch(conn, batch, task.task_id, status="failed", error=msg)
+        except Exception:
+            pass
+        print(f"\n[{task.task_id}] 采集异常：{msg}")
         raise SystemExit(1)
