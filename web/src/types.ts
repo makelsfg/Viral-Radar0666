@@ -9,6 +9,7 @@ export interface TaskInfo {
 
 export interface ProductRow {
   item_id: string
+  platform: string
   title: string | null
   image_url: string | null
   price_final: number | null
@@ -29,6 +30,7 @@ export interface ProductRow {
 
 export interface ProductDetail {
   item_id: string
+  platform?: string
   title: string | null
   image_url: string | null
   shop_name: string | null
@@ -59,6 +61,10 @@ export interface JobState {
   batch?: string
   task_id?: string
   task_name?: string
+  task_platform?: string
+  task_index?: number
+  task_total?: number
+  platforms?: string[]
   message?: string | null
   error?: string | null
 }

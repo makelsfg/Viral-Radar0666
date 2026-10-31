@@ -17,9 +17,19 @@ from .browser import (
     launch_context,
 )
 from .config import RAW_DIR
-from .detail_collector import click_and_extract
-from .list_collector import collect_pages, open_search_page
 from .parse import parse_price
+
+
+def _platform_adapters(platform: str):
+    """返回 (collect_pages, open_search_page, click_and_extract)。"""
+    if platform == "1688":
+        from .platforms import alibaba as adapter
+
+        return adapter.collect_pages, adapter.open_search_page, adapter.click_and_extract
+    from .detail_collector import click_and_extract
+    from .list_collector import collect_pages, open_search_page
+
+    return collect_pages, open_search_page, click_and_extract
 
 
 def batch_id(now: datetime | None = None) -> str:
@@ -69,6 +79,7 @@ def _enrich_with_apify(conn, task, batch: str, pending: list[dict], raw_dir) -> 
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         db.upsert_product(conn, {
+            "platform": task.platform,
             "item_id": iid,
             "title": rec["title"] or r.get("title") or "",
             "shop_name": rec["shop_name"] or r.get("shop_name"),
@@ -93,7 +104,8 @@ def _enrich_with_apify(conn, task, batch: str, pending: list[dict], raw_dir) -> 
 
 
 def _collect_details_by_click(
-    conn, ctx, task, batch: str, pending: list[dict], done_count: int, raw_dir
+    conn, ctx, task, batch: str, pending: list[dict], done_count: int, raw_dir,
+    open_search_page_fn, click_fn,
 ) -> int:
     """本地通道：在搜索结果页点击进入详情，拟人节奏。返回已处理数量。"""
     by_page: dict[int, list] = {}
@@ -104,7 +116,7 @@ def _collect_details_by_click(
     for pageno in sorted(by_page):
         items = by_page[pageno]
         print(f"  打开搜索结果第 {pageno} 页，准备点击进入 {len(items)} 个详情")
-        list_page = open_search_page(ctx, task, pageno)
+        list_page = open_search_page_fn(ctx, task, pageno)
         try:
             # 先像真人一样随意浏览一会儿列表，再开始点
             for _ in range(random.randint(2, 4)):
@@ -117,7 +129,7 @@ def _collect_details_by_click(
             for r in items:
                 iid = r["item_id"]
                 print(f"  -> 详情 {processed + 1}/{len(pending)}：{iid}")
-                detail = click_and_extract(ctx, list_page, iid, save_html=task.save_html)
+                detail = click_fn(ctx, list_page, iid, save_html=task.save_html)
 
                 price_final = _price_guard(
                     detail["price_final"], parse_price(r.get("price_text") or "")
@@ -135,6 +147,7 @@ def _collect_details_by_click(
                 )
 
                 db.upsert_product(conn, {
+                    "platform": task.platform,
                     "item_id": iid,
                     "title": detail["title"] or r.get("title") or "",
                     "shop_name": detail["shop_name"] or r.get("shop_name"),
@@ -195,8 +208,10 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
         }, ensure_ascii=False),
     )
 
-    raw_dir = RAW_DIR / batch
+    raw_dir = RAW_DIR / batch / task.platform
     raw_dir.mkdir(parents=True, exist_ok=True)
+
+    collect_pages_fn, open_search_page_fn, click_fn = _platform_adapters(task.platform)
 
     try:
         with browser_runtime() as p:
@@ -207,8 +222,8 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
 
                 # 阶段一：搜索页
                 if page_done < task.pages:
-                    print(f"[{task.task_id}] 采集搜索页（{task.pages} 页，天猫 tab）")
-                    cards = collect_pages(ctx, task, start_page=1)
+                    print(f"[{task.task_id}] 采集搜索页（{task.pages} 页，{task.platform}）")
+                    cards = collect_pages_fn(ctx, task, start_page=1)
                     stamp = datetime.now().isoformat(timespec="seconds")
                     for c in cards:
                         db.upsert_snapshot(
@@ -216,6 +231,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                             c["rank"], c["price_text"], c["sold_text"], c["sold_lb"], None, None,
                             title=c["title"], image_url=c["image_url"],
                             shop_name=c["shop_name"], page_no=c.get("page_no"),
+                            platform=task.platform,
                         )
                     conn.commit()
                     db.set_batch(
@@ -254,12 +270,13 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                             "同类目连续采详情是触发风控的主要来源。"
                         )
 
-                    if provider == "apify":
+                    if provider == "apify" and task.platform == "tmall":
                         print(f"[{task.task_id}] 详情通道：Apify（本地不访问详情页）")
                         _enrich_with_apify(conn, task, batch, pending, raw_dir)
                     else:
                         _collect_details_by_click(
-                            conn, ctx, task, batch, pending, done_count, raw_dir
+                            conn, ctx, task, batch, pending, done_count, raw_dir,
+                            open_search_page_fn, click_fn,
                         )
 
                 db.set_batch(

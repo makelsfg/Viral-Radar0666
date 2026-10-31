@@ -4,6 +4,7 @@ import {
   App as AntApp,
   Button,
   Card,
+  Checkbox,
   Form,
   Input,
   InputNumber,
@@ -71,6 +72,10 @@ export default function CollectPanel() {
     try {
       const created = await api.collect({
         keyword: values.keyword,
+        platforms:
+          Array.isArray(values.platforms) && values.platforms.length > 0
+            ? values.platforms
+            : ['tmall'],
         pages: values.pages ?? 1,
         detail_top: values.detail_top ?? 0,
         detail_order: values.detail_order ?? 'rank',
@@ -149,9 +154,27 @@ export default function CollectPanel() {
           form={form}
           layout="inline"
           onFinish={start}
-          initialValues={{ pages: 1, detail_top: 0, detail_order: 'rank' }}
+          initialValues={{
+            pages: 1,
+            detail_top: 0,
+            detail_order: 'rank',
+            platforms: ['tmall'],
+          }}
           style={{ rowGap: 12 }}
         >
+          <Form.Item
+            name="platforms"
+            label="采集平台"
+            rules={[{ required: true, message: '请至少选择一个平台' }]}
+          >
+            <Checkbox.Group
+              options={[
+                { label: '天猫', value: 'tmall' },
+                { label: '1688', value: '1688' },
+                { label: '拼多多（实验版，下一步接入）', value: 'pdd', disabled: true },
+              ]}
+            />
+          </Form.Item>
           <Form.Item
             name="keyword"
             label="商品关键词"
@@ -191,6 +214,7 @@ export default function CollectPanel() {
         </Form>
         <div className="hint">
           每页约 40–60 个商品；详情样本数 = 进入详情页采集的头部商品数（越多越慢、风控压力越大）。
+          1688 首次使用前，请先在终端运行 <code>python -m bkr.cli login --site 1688</code> 完成登录。
         </div>
         {conservative && (
           <Alert

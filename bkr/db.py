@@ -11,6 +11,7 @@ from .config import DB_PATH
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS dim_task (
   task_id       TEXT PRIMARY KEY,
+  platform      TEXT NOT NULL DEFAULT 'tmall',
   name          TEXT NOT NULL,
   keywords      TEXT NOT NULL,
   sort          TEXT DEFAULT 'sale-desc',
@@ -25,7 +26,8 @@ CREATE TABLE IF NOT EXISTS dim_task (
 );
 
 CREATE TABLE IF NOT EXISTS product (
-  item_id       TEXT PRIMARY KEY,
+  platform      TEXT NOT NULL DEFAULT 'tmall',
+  item_id       TEXT NOT NULL,
   title         TEXT,
   shop_name     TEXT,
   shop_rating   REAL,
@@ -36,12 +38,14 @@ CREATE TABLE IF NOT EXISTS product (
   video_url     TEXT,
   product_url   TEXT,
   first_seen_at TEXT,
-  updated_at    TEXT
+  updated_at    TEXT,
+  PRIMARY KEY (platform, item_id)
 );
 
 CREATE TABLE IF NOT EXISTS fact_snapshot (
   snapshot_id  INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id      TEXT NOT NULL,
+  platform     TEXT NOT NULL DEFAULT 'tmall',
   item_id      TEXT NOT NULL,
   batch        TEXT NOT NULL,
   captured_at  TEXT NOT NULL,
@@ -104,10 +108,48 @@ def _migrate(conn: sqlite3.Connection) -> None:
     task_cols = {row[1] for row in conn.execute("PRAGMA table_info(dim_task)")}
     if "detail_order" not in task_cols:
         conn.execute("ALTER TABLE dim_task ADD COLUMN detail_order TEXT DEFAULT 'rank'")
+    if "platform" not in task_cols:
+        conn.execute("ALTER TABLE dim_task ADD COLUMN platform TEXT DEFAULT 'tmall'")
 
     run_cols = {row[1] for row in conn.execute("PRAGMA table_info(batch_run)")}
     if "config_json" not in run_cols:
         conn.execute("ALTER TABLE batch_run ADD COLUMN config_json TEXT")
+
+    snap_cols = {row[1] for row in conn.execute("PRAGMA table_info(fact_snapshot)")}
+    if "platform" not in snap_cols:
+        conn.execute("ALTER TABLE fact_snapshot ADD COLUMN platform TEXT DEFAULT 'tmall'")
+
+    prod_cols = {row[1] for row in conn.execute("PRAGMA table_info(product)")}
+    if prod_cols and "platform" not in prod_cols:
+        conn.executescript(
+            """
+            ALTER TABLE product RENAME TO product_old;
+            CREATE TABLE product (
+              platform      TEXT NOT NULL DEFAULT 'tmall',
+              item_id       TEXT NOT NULL,
+              title         TEXT,
+              shop_name     TEXT,
+              shop_rating   REAL,
+              positive_rate TEXT,
+              sku_names     TEXT,
+              params_json   TEXT,
+              image_url     TEXT,
+              video_url     TEXT,
+              product_url   TEXT,
+              first_seen_at TEXT,
+              updated_at    TEXT,
+              PRIMARY KEY (platform, item_id)
+            );
+            INSERT INTO product(platform, item_id, title, shop_name, shop_rating,
+                                positive_rate, sku_names, params_json, image_url,
+                                video_url, product_url, first_seen_at, updated_at)
+            SELECT 'tmall', item_id, title, shop_name, shop_rating,
+                   positive_rate, sku_names, params_json, image_url,
+                   video_url, product_url, first_seen_at, updated_at
+            FROM product_old;
+            DROP TABLE product_old;
+            """
+        )
     conn.commit()
 
 
@@ -125,17 +167,18 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
 
 def upsert_task(conn, task) -> None:
     conn.execute(
-        """INSERT INTO dim_task(task_id, name, keywords, sort, pages, detail_top,
+        """INSERT INTO dim_task(task_id, platform, name, keywords, sort, pages, detail_top,
                                detail_order, price_min, price_max, exclude_words, enabled, created_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,1,datetime('now'))
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,1,datetime('now'))
            ON CONFLICT(task_id) DO UPDATE SET
-             name=excluded.name, keywords=excluded.keywords, sort=excluded.sort,
-             pages=excluded.pages, detail_top=excluded.detail_top,
+             platform=excluded.platform, name=excluded.name, keywords=excluded.keywords,
+             sort=excluded.sort, pages=excluded.pages, detail_top=excluded.detail_top,
              detail_order=excluded.detail_order,
              price_min=excluded.price_min, price_max=excluded.price_max,
              exclude_words=excluded.exclude_words""",
         (
             task.task_id,
+            getattr(task, "platform", "tmall"),
             task.name,
             json.dumps(task.keywords, ensure_ascii=False),
             task.sort,
@@ -194,13 +237,15 @@ def upsert_snapshot(
     image_url: str | None = None,
     shop_name: str | None = None,
     page_no: int | None = None,
+    platform: str = "tmall",
 ) -> None:
     conn.execute(
-        """INSERT INTO fact_snapshot(task_id, item_id, batch, captured_at, rank,
+        """INSERT INTO fact_snapshot(task_id, platform, item_id, batch, captured_at, rank,
                                      price_text, sold_text, sold_lb, cart_text, cart_lb,
                                      title, image_url, shop_name, page_no, is_detail)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
            ON CONFLICT(task_id, item_id, batch) DO UPDATE SET
+             platform=excluded.platform,
              captured_at=excluded.captured_at, rank=excluded.rank,
              price_text=excluded.price_text, sold_text=excluded.sold_text,
              sold_lb=excluded.sold_lb, cart_text=excluded.cart_text,
@@ -208,7 +253,7 @@ def upsert_snapshot(
              title=excluded.title, image_url=excluded.image_url, shop_name=excluded.shop_name,
              page_no=excluded.page_no""",
         (
-            task_id, item_id, batch, captured_at, rank,
+            task_id, platform, item_id, batch, captured_at, rank,
             price_text, sold_text, sold_lb, cart_text, cart_lb,
             title, image_url, shop_name, page_no,
         ),
@@ -226,18 +271,18 @@ def set_snapshot_detail(conn, task_id: str, item_id: str, batch: str, price_fina
 
 def upsert_product(conn, rec: dict) -> None:
     fields = [
-        "item_id", "title", "shop_name", "shop_rating", "positive_rate",
+        "platform", "item_id", "title", "shop_name", "shop_rating", "positive_rate",
         "sku_names", "params_json", "image_url", "video_url", "product_url",
         "first_seen_at", "updated_at",
     ]
-    values = [rec.get(f) for f in fields]
-    update_cols = [f for f in fields if f != "item_id"]
+    values = [rec.get(f) or ("tmall" if f == "platform" else None) for f in fields]
+    update_cols = [f for f in fields if f not in ("item_id", "platform")]
     sets = ", ".join(f"{c}=excluded.{c}" for c in update_cols if c != "first_seen_at")
     sets += ", first_seen_at=COALESCE(product.first_seen_at, excluded.first_seen_at)"
     conn.execute(
         f"""INSERT INTO product({', '.join(fields)})
             VALUES({', '.join('?' * len(fields))})
-            ON CONFLICT(item_id) DO UPDATE SET {sets}""",
+            ON CONFLICT(platform, item_id) DO UPDATE SET {sets}""",
         values,
     )
     conn.commit()

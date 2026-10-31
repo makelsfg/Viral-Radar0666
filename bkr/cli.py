@@ -17,9 +17,9 @@ def _find_task(task_id: str):
     raise ConfigError(f"找不到任务: {task_id}（检查 config/tasks/ 下的 YAML）")
 
 
-def cmd_login(_args) -> None:
+def cmd_login(args) -> None:
     from .browser import login
-    login()
+    login(getattr(args, "site", "taobao"))
 
 
 def cmd_logout(_args) -> None:
@@ -62,14 +62,15 @@ def cmd_export(args) -> None:
     if getattr(args, "only_detail", False):
         where += " AND s.is_detail=1"
     rows = conn.execute(
-        f"""SELECT s.item_id,
+        f"""SELECT s.item_id, s.platform,
                    COALESCE(p.title, s.title) AS title,
                    s.price_final, s.price_text, s.sold_text, s.cart_text,
                    COALESCE(p.shop_name, s.shop_name) AS shop_name,
                    p.shop_rating, p.positive_rate, p.sku_names, p.params_json,
                    COALESCE(p.image_url, s.image_url) AS image_url,
                    p.product_url, s.captured_at
-            FROM fact_snapshot s LEFT JOIN product p ON p.item_id = s.item_id
+            FROM fact_snapshot s
+            LEFT JOIN product p ON p.item_id = s.item_id AND p.platform = s.platform
             WHERE {where}
             ORDER BY COALESCE(s.sold_lb, -1) DESC, s.rank ASC""",
         (args.task, batch),
@@ -80,7 +81,7 @@ def cmd_export(args) -> None:
     path = out_dir / f"{args.task}_{batch}.csv"
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
-        w.writerow(["item_id", "标题", "到手价", "已售", "加购", "店铺", "评分",
+        w.writerow(["平台", "item_id", "标题", "到手价", "已售", "加购", "店铺", "评分",
                     "好评率", "SKU", "参数", "主图", "链接", "采集时间"])
         for r in rows:
             price = r["price_final"]
@@ -88,7 +89,7 @@ def cmd_export(args) -> None:
                 price = parse_price(r["price_text"] or "")
             url = r["product_url"] or f"https://detail.tmall.com/item.htm?id={r['item_id']}"
             w.writerow([
-                r["item_id"], r["title"], price, r["sold_text"], r["cart_text"],
+                r["platform"], r["item_id"], r["title"], price, r["sold_text"], r["cart_text"],
                 r["shop_name"], r["shop_rating"], r["positive_rate"], r["sku_names"],
                 r["params_json"], r["image_url"], url, r["captured_at"],
             ])
@@ -109,7 +110,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bkr", description="爆款雷达 · 天猫品类采集")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("login", help="打开浏览器人工登录并保存登录态")
+    p = sub.add_parser("login", help="打开浏览器人工登录并保存登录态")
+    p.add_argument("--site", choices=["taobao", "1688"], default="taobao")
 
     sub.add_parser("logout", help="清除当前 profile 的登录态（换账号前使用）")
 

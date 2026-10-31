@@ -170,8 +170,8 @@ _LOGIN_MARKERS = ("亲，请登录", "扫码登录", "密码登录")
 def check_blocked(page) -> None:
     """检测登录失效 / 滑块验证 / 访问异常，命中即抛异常（由上层暂停批次）。"""
     url = (page.url or "").lower()
-    if "login.taobao.com" in url or "login.tmall.com" in url:
-        raise LoginError("登录态已失效：请重新运行 bkr login，然后执行 --resume 续采")
+    if "login.taobao.com" in url or "login.tmall.com" in url or "login.1688.com" in url:
+        raise LoginError("登录态已失效：请重新运行 bkr login（1688 用 --site 1688），然后执行 --resume 续采")
     if "punish" in url or "captcha" in url:
         raise BlockedError("触发了风控页面，请人工处理后续采")
 
@@ -218,37 +218,41 @@ def human_move(page, x: float, y: float) -> None:
         pass
 
 
-def login() -> None:
-    """打开浏览器人工扫码登录。登录态保存在持久化 profile 中，快照仅作备份。"""
+def login(site: str = "taobao") -> None:
+    """打开浏览器人工扫码登录（site=taobao/1688，共用同一个持久化 profile）。"""
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    site = (site or "taobao").strip().lower()
     if CDP_URL:
-        print(f"CDP 模式：接管 {CDP_URL} 上的 Chrome（请确保已在该浏览器登录淘宝）")
+        print(f"CDP 模式：接管 {CDP_URL} 上的 Chrome（请确保已在该浏览器登录）")
     else:
         print(f"当前浏览器 profile：{PROFILE_DIR}")
     print(f"当前引擎：{engine_name()}    浏览器：{browser_channel()}")
 
+    target = "https://www.1688.com" if site == "1688" else "https://www.taobao.com"
     with browser_runtime() as p:
         ctx = launch_context(p)
         page = ctx.new_page()
         try:
-            page.goto("https://www.taobao.com", wait_until="domcontentloaded")
-            print("请在弹出的浏览器窗口里完成登录（扫码即可）。")
+            page.goto(target, wait_until="domcontentloaded")
+            print(f"请在弹出的浏览器窗口里完成 {site} 登录（扫码即可）。")
             print("⚠️ 登录完成后【不要关闭浏览器窗口】，直接回到终端按回车。")
             input()
 
             logged_in = False
             try:
                 cookie_names = {c.get("name") for c in ctx.cookies()}
-                logged_in = has_login_cookies(cookie_names)
+                if site == "1688":
+                    logged_in = bool({"__cn_logon__", "cookie2", "_cn_"} & cookie_names)
+                else:
+                    logged_in = has_login_cookies(cookie_names)
                 print(f"检测到浏览器 cookie {len(cookie_names)} 个")
-                if not logged_in and "tracknick" in cookie_names:
+                if site != "1688" and not logged_in and "tracknick" in cookie_names:
                     print("检测到 tracknick 但缺少 cookie2/unb（半登录），请完成扫码后的全部确认步骤")
             except Exception:
                 print("浏览器窗口在回车前已关闭；登录态可能已写入本地 profile")
 
             if logged_in:
-                # 等 cookie 落盘稳定后再关闭，避免半登录
-                time.sleep(2)  # noqa: F821  (time 已在模块顶部导入)
+                time.sleep(2)  # 等 cookie 落盘稳定后再关闭，避免半登录
             try:
                 ctx.storage_state(path=str(STATE_PATH))
                 print(f"登录态快照已保存：{STATE_PATH}")
@@ -262,6 +266,6 @@ def login() -> None:
             close_context(ctx)
 
     if logged_in:
-        print("登录完成。下一步：python -m bkr.cli collect --task kids-bottle")
+        print(f"{site} 登录完成。")
     else:
-        print("未确认到登录 cookie。若 collect 提示未登录，请重新执行 bkr login（且不要提前关闭窗口）。")
+        print(f"未确认到 {site} 登录 cookie。若采集提示未登录，请重新执行 bkr login --site {site}（且不要提前关闭窗口）。")

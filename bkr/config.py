@@ -87,6 +87,7 @@ class Task:
     task_id: str
     name: str
     keywords: list[str]
+    platform: str = "tmall"
     tab: str = "mall"
     sort: str = "sale-desc"
     pages: int = 1
@@ -127,6 +128,7 @@ def load_task(path: str | Path) -> Task:
         task_id=str(raw["task_id"]),
         name=str(raw.get("name") or raw["task_id"]),
         keywords=[str(k).strip() for k in keywords if str(k).strip()],
+        platform=str(raw.get("platform") or "tmall").strip().lower(),
         tab=str(entry.get("tab") or raw.get("tab") or "mall"),
         sort=str(entry.get("sort") or raw.get("sort") or "sale-desc"),
         pages=int(raw.get("pages", entry.get("pages", 2))),
@@ -145,6 +147,8 @@ def load_task(path: str | Path) -> Task:
         raise ConfigError(f"{path.name} detail_top 必须 >= 0")
     if task.detail_order not in ("rank", "sold"):
         raise ConfigError(f"{path.name} detail_order 只能是 rank 或 sold")
+    if task.platform not in ("tmall", "1688", "pdd"):
+        raise ConfigError(f"{path.name} platform 只能是 tmall / 1688 / pdd")
     if task.price_min is not None and task.price_max is not None and task.price_min > task.price_max:
         raise ConfigError(f"{path.name} price_min 不能大于 price_max")
     return task

@@ -1,0 +1,1 @@
+"""平台采集适配器包：tmall 沿用 bkr.list_collector / detail_collector，1688 见 alibaba.py。"""

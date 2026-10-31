@@ -25,9 +25,13 @@ def _loads(value, default):
 
 
 def _cleanup_orphan_products(conn) -> None:
-    """删除不再被任何快照引用的商品行（不误伤其他品类共用的商品）。"""
+    """删除不再被任何快照引用的商品行（按 platform+item_id 对齐）。"""
     conn.execute(
-        "DELETE FROM product WHERE item_id NOT IN (SELECT DISTINCT item_id FROM fact_snapshot)"
+        """DELETE FROM product
+           WHERE NOT EXISTS (
+             SELECT 1 FROM fact_snapshot s
+             WHERE s.item_id = product.item_id AND s.platform = product.platform
+           )"""
     )
 
 
@@ -81,7 +85,7 @@ def products(
         if only_detail:
             where += " AND s.is_detail=1"
         rows = conn.execute(
-            f"""SELECT s.item_id,
+            f"""SELECT s.item_id, s.platform,
                        COALESCE(p.title, s.title) AS title,
                        COALESCE(p.image_url, s.image_url) AS image_url,
                        s.price_final, s.price_text, s.sold_text, s.sold_lb,
@@ -91,7 +95,8 @@ def products(
                        s.rank, s.captured_at,
                        p.product_url, p.params_json, p.sku_names
                FROM fact_snapshot s
-               LEFT JOIN product p ON p.item_id = s.item_id
+               LEFT JOIN product p
+                 ON p.item_id = s.item_id AND p.platform = s.platform
                WHERE {where}
                ORDER BY COALESCE(s.sold_lb, -1) DESC, s.rank ASC""",
             (task_id, batch),
@@ -109,6 +114,7 @@ def products(
         out.append(
             {
                 "item_id": r["item_id"],
+                "platform": r["platform"],
                 "title": r["title"],
                 "image_url": r["image_url"],
                 "price_final": price_final,
@@ -131,14 +137,16 @@ def products(
 
 
 @router.get("/products/{item_id}")
-def product(item_id: str):
+def product(item_id: str, platform: str = Query(default="tmall")):
     conn = db.connect()
     try:
-        p = conn.execute("SELECT * FROM product WHERE item_id=?", (item_id,)).fetchone()
+        p = conn.execute(
+            "SELECT * FROM product WHERE platform=? AND item_id=?", (platform, item_id)
+        ).fetchone()
         hist = conn.execute(
             """SELECT batch, price_final, sold_lb, cart_lb, captured_at
-               FROM fact_snapshot WHERE item_id=? ORDER BY batch""",
-            (item_id,),
+               FROM fact_snapshot WHERE platform=? AND item_id=? ORDER BY batch""",
+            (platform, item_id),
         ).fetchall()
     finally:
         conn.close()
@@ -146,6 +154,7 @@ def product(item_id: str):
         raise HTTPException(status_code=404, detail="商品不存在")
     return {
         "item_id": item_id,
+        "platform": platform,
         "title": p["title"],
         "image_url": p["image_url"],
         "video_url": p["video_url"],
@@ -211,13 +220,14 @@ def export(task_id: str, batch: str, only_detail: int = 1):
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(
-        ["item_id", "标题", "到手价", "已售", "加购", "店铺", "评分", "好评率",
+        ["平台", "item_id", "标题", "到手价", "已售", "加购", "店铺", "评分", "好评率",
          "SKU", "参数", "主图", "链接", "采集时间"]
     )
     for r in rows:
         writer.writerow(
             [
-                r["item_id"], r["title"], r["price_final"], r["sold_text"], r["cart_text"],
+                r["platform"], r["item_id"], r["title"], r["price_final"],
+                r["sold_text"], r["cart_text"],
                 r["shop_name"], r["shop_rating"], r["positive_rate"],
                 " / ".join(r["skus"]), json.dumps(r["params"], ensure_ascii=False),
                 r["image_url"], r["product_url"], r["captured_at"],

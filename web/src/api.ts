@@ -43,7 +43,10 @@ export const api = {
       `/api/products?task_id=${encodeURIComponent(taskId)}&batch=${encodeURIComponent(batch)}` +
         `&only_detail=${onlyDetail ? 1 : 0}`,
     ),
-  product: (itemId: string) => request<ProductDetail>(`/api/products/${itemId}`),
+  product: (itemId: string, platform = 'tmall') =>
+    request<ProductDetail>(
+      `/api/products/${encodeURIComponent(itemId)}?platform=${encodeURIComponent(platform)}`,
+    ),
   deleteTask: (taskId: string) =>
     request<{ ok: boolean }>(`/api/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' }),
   deleteBatch: (taskId: string, batch: string) =>

@@ -97,22 +97,118 @@ class JobManager:
     # ---------- 采集 ----------
 
     def start_collect(self, task: Task, batch: str, resume: bool = False) -> dict:
+        return self.start_collect_many([task], batch, resume=resume)
+
+    def start_collect_many(self, tasks: list[Task], batch: str, resume: bool = False) -> dict:
+        if not tasks:
+            raise BusyError("没有可采集的平台任务")
         if not self._run_lock.acquire(blocking=False):
             raise BusyError("已有一个采集/登录任务在运行，请等待完成")
+        first = tasks[0]
         job = self._new_job(
             type="collect",
-            task_id=task.task_id,
-            task_name=task.name,
+            task_id=first.task_id,
+            task_name=first.name,
+            task_platform=first.platform,
             batch=batch,
-            pages=task.pages,
-            detail_total=task.detail_top,
+            platforms=[t.platform for t in tasks],
+            task_index=1,
+            task_total=len(tasks),
+            pages=first.pages,
+            detail_total=first.detail_top,
             message="正在启动浏览器…",
         )
+        job["_task_ids"] = [t.task_id for t in tasks]
         self._publish(job)
         threading.Thread(
-            target=self._run_collect, args=(job, task, batch, resume), daemon=True
+            target=self._run_collect_many, args=(job, tasks, batch, resume), daemon=True
         ).start()
         return job
+
+    def _run_collect_many(self, job: dict, tasks: list[Task], batch: str, resume: bool) -> None:
+        stop = threading.Event()
+
+        def monitor() -> None:
+            last = None
+            while not stop.wait(2.0):
+                task_id = job.get("_current_task_id")
+                if not task_id:
+                    continue
+                snap = None
+                try:
+                    conn = db.connect()
+                    try:
+                        row = db.get_batch(conn, batch, task_id)
+                    finally:
+                        conn.close()
+                    if row:
+                        status = row.get("status")
+                        if status not in ("running", "paused_captcha", "failed", "done"):
+                            status = "running"
+                        snap = {
+                            "status": status,
+                            "stage": row.get("stage") or "start",
+                            "page_done": int(row.get("page_done") or 0),
+                            "items_count": int(row.get("items_count") or 0),
+                            "detail_done": int(row.get("detail_done") or 0),
+                            "error": row.get("error"),
+                        }
+                except Exception:
+                    snap = None
+                if snap and snap != last:
+                    last = snap
+                    job.update(snap)
+                    job["message"] = _progress_message(job)
+                    self._publish(job)
+
+        mt = threading.Thread(target=monitor, daemon=True)
+        mt.start()
+        try:
+            for idx, task in enumerate(tasks, 1):
+                job.update(
+                    task_id=task.task_id,
+                    task_name=task.name,
+                    task_platform=task.platform,
+                    task_index=idx,
+                    task_total=len(tasks),
+                    pages=task.pages,
+                    detail_total=task.detail_top,
+                    page_done=0,
+                    detail_done=0,
+                    items_count=0,
+                    stage="start",
+                    status="running",
+                    error=None,
+                    message=f"正在启动 {task.name} …",
+                )
+                job["_current_task_id"] = task.task_id
+                self._publish(job)
+                run_task(task, batch=batch, resume=resume)
+            job.update(status="done", stage="done", message="采集完成")
+        except SystemExit:
+            task_id = job.get("_current_task_id")
+            row = {}
+            try:
+                conn = db.connect()
+                try:
+                    row = db.get_batch(conn, batch, task_id) or {}
+                finally:
+                    conn.close()
+            except Exception:
+                pass
+            job["status"] = row.get("status") or "failed"
+            job["error"] = row.get("error")
+            job["message"] = row.get("error") or "采集中断"
+        except Exception as exc:  # noqa: BLE001
+            job["status"] = "failed"
+            job["error"] = f"{type(exc).__name__}: {exc}"
+            job["message"] = job["error"]
+        finally:
+            stop.set()
+            mt.join(timeout=3)
+            job["finished_at"] = _now()
+            self._publish(job)
+            self._run_lock.release()
 
     def _run_collect(self, job: dict, task: Task, batch: str, resume: bool) -> None:
         stop = threading.Event()
@@ -245,18 +341,21 @@ class JobManager:
 
 def _progress_message(job: dict) -> str:
     status = job.get("status")
+    prefix = ""
+    if int(job.get("task_total") or 1) > 1 and job.get("task_platform"):
+        prefix = f"[{job.get('task_platform')}] "
     if status == "paused_captcha":
-        return "触发验证或登录失效：请在浏览器处理后点击「继续采集」"
+        return prefix + "触发验证或登录失效：请在浏览器处理后点击「继续采集」"
     if status == "failed":
-        return job.get("error") or "采集失败"
+        return prefix + (job.get("error") or "采集失败")
     if status == "done":
-        return "采集完成"
+        return prefix + "采集完成"
     stage = job.get("stage")
     if stage == "list":
-        return f"正在采集搜索结果（第 {job.get('page_done')}/{job.get('pages')} 页）"
+        return prefix + f"正在采集搜索结果（第 {job.get('page_done')}/{job.get('pages')} 页）"
     if stage == "detail":
-        return f"正在采集商品详情（{job.get('detail_done')}/{job.get('detail_total')}）"
-    return "采集中…"
+        return prefix + f"正在采集商品详情（{job.get('detail_done')}/{job.get('detail_total')}）"
+    return prefix + "采集中…"
 
 
 manager = JobManager()

@@ -13,8 +13,17 @@ from .list_collector import SEARCH_URL
 def debug_search(task, page_no: int = 1) -> None:
     from .browser import browser_runtime, check_blocked, close_context, launch_context
 
-    url = SEARCH_URL.format(q=quote(task.keywords[0]), tab=task.tab, sort=task.sort, page=page_no)
-    print(f"打开：{url}")
+    platform = getattr(task, "platform", "tmall")
+    if platform == "1688":
+        url = (
+            "https://s.1688.com/selloffer/offer_search.htm"
+            f"?keywords={quote(task.keywords[0])}&beginPage={page_no}"
+        )
+        anchor_hint = "/offer/"
+    else:
+        url = SEARCH_URL.format(q=quote(task.keywords[0]), tab=task.tab, sort=task.sort, page=page_no)
+        anchor_hint = "item.htm"
+    print(f"打开（{platform}）：{url}")
 
     with browser_runtime() as p:
         ctx = launch_context(p)
@@ -29,9 +38,9 @@ def debug_search(task, page_no: int = 1) -> None:
                 pass
 
             stats = page.evaluate(
-                """() => {
+                """(hint) => {
                     const anchors = Array.from(document.querySelectorAll('a'));
-                    const itemLinks = anchors.filter(a => (a.href || '').includes('item.htm'));
+                    const itemLinks = anchors.filter(a => (a.href || '').includes(hint));
                     const body = (document.body.innerText || '');
                     return {
                         url: location.href,
@@ -41,10 +50,11 @@ def debug_search(task, page_no: int = 1) -> None:
                         firstItemHrefs: itemLinks.slice(0, 5).map(a => a.href),
                         bodyLength: body.length,
                         bodyHead: body.slice(0, 300),
-                        hasLoginTip: body.includes('亲，请登录'),
+                        hasLoginTip: body.includes('亲，请登录') || body.includes('请登录'),
                         hasVerifyText: /滑动验证|完成验证|安全验证|访问异常/.test(body),
                     };
-                }"""
+                }""",
+                anchor_hint,
             )
             print(json.dumps(stats, ensure_ascii=False, indent=2))
 

@@ -35,14 +35,15 @@ def _rows(task_id: str, batch: str) -> list[dict]:
     conn = db.connect()
     try:
         rows = conn.execute(
-            """SELECT s.item_id,
+            """SELECT s.item_id, s.platform,
                       COALESCE(p.title, s.title) AS title,
                       s.price_final, s.price_text, s.sold_lb, s.sold_text, s.cart_lb,
                       COALESCE(p.shop_name, s.shop_name) AS shop_name,
                       COALESCE(p.image_url, s.image_url) AS image_url,
                       p.product_url, p.params_json, p.sku_names, s.is_detail
                FROM fact_snapshot s
-               LEFT JOIN product p ON p.item_id = s.item_id
+               LEFT JOIN product p
+                 ON p.item_id = s.item_id AND p.platform = s.platform
                WHERE s.task_id=? AND s.batch=?""",
             (task_id, batch),
         ).fetchall()
@@ -60,6 +61,7 @@ def _rows(task_id: str, batch: str) -> list[dict]:
         out.append(
             {
                 "item_id": r["item_id"],
+                "platform": r["platform"],
                 "title": r["title"],
                 "price_final": price,
                 "price_source": price_source,

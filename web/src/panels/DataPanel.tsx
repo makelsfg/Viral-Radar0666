@@ -83,7 +83,7 @@ export default function DataPanel() {
 
   const openDetail = async (row: ProductRow) => {
     try {
-      setDetail(await api.product(row.item_id))
+      setDetail(await api.product(row.item_id, row.platform))
       setDrawerOpen(true)
     } catch (e: any) {
       message.error(e.message || '加载详情失败')
