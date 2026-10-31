@@ -18,6 +18,7 @@ import { DownloadOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-desig
 import { api } from '../api'
 import { useSse } from '../sse'
 import type { JobState, ReportMeta } from '../types'
+import RunModal, { explainError } from '../components/RunModal'
 
 const STATUS_TEXT: Record<string, string> = {
   running: '采集中',
@@ -27,6 +28,8 @@ const STATUS_TEXT: Record<string, string> = {
   done: '已完成',
   failed: '失败',
   timeout: '超时',
+  cancelling: '正在结束',
+  cancelled: '已取消',
 }
 const STATUS_COLOR: Record<string, string> = {
   running: 'processing',
@@ -36,6 +39,8 @@ const STATUS_COLOR: Record<string, string> = {
   done: 'success',
   failed: 'error',
   timeout: 'warning',
+  cancelling: 'warning',
+  cancelled: 'default',
 }
 const PLATFORM_LABELS: Record<string, string> = {
   tmall: '天猫',
@@ -44,12 +49,15 @@ const PLATFORM_LABELS: Record<string, string> = {
 }
 
 export default function CollectPanel() {
-  const { message } = AntApp.useApp()
+  const { message, modal } = AntApp.useApp()
   const [form] = Form.useForm()
   const [job, setJob] = useState<JobState | null>(null)
   const [conservative, setConservative] = useState(true)
   const [loginRunning, setLoginRunning] = useState(false)
   const [report, setReport] = useState<ReportMeta | null>(null)
+  const [runOpen, setRunOpen] = useState(false)
+  const [cancelRequested, setCancelRequested] = useState(false)
+  const promptedRef = useRef<string | null>(null)
   const jobRef = useRef<string | null>(null)
 
   const applyJob = (j: JobState) => {
@@ -111,6 +119,9 @@ export default function CollectPanel() {
       })
       jobRef.current = created.id
       setJob(created)
+      setRunOpen(true)
+      setCancelRequested(false)
+      promptedRef.current = null
       message.success('已开始：先检查登录状态，未授权平台会弹出登录窗口')
     } catch (e: any) {
       message.error(e.message || '启动采集失败')
@@ -123,11 +134,74 @@ export default function CollectPanel() {
       const created = await api.resume(job.id)
       jobRef.current = created.id
       setJob(created)
+      setRunOpen(true)
+      setCancelRequested(false)
+      promptedRef.current = null
       message.info('已继续采集')
     } catch (e: any) {
       message.error(e.message || '续采失败')
     }
   }
+
+  const requestClose = () => {
+    if (!job) {
+      setRunOpen(false)
+      return
+    }
+    const active = ['running', 'waiting', 'auth_required', 'cancelling', 'paused_captcha'].includes(
+      job.status,
+    )
+    if (!active) {
+      setRunOpen(false)
+      return
+    }
+    modal.confirm({
+      title: '结束本次采集？',
+      content: '会立即结束所有采集进程并关闭采集浏览器；已采集的数据稍后由你决定是否保存。',
+      okText: '结束采集',
+      okButtonProps: { danger: true },
+      cancelText: '继续采集',
+      onOk: async () => {
+        try {
+          setCancelRequested(true)
+          await api.cancelJob(job.id)
+          message.info('正在结束采集并关闭进程…')
+        } catch (e: any) {
+          setCancelRequested(false)
+          message.error(e.message || '结束任务失败')
+        }
+      },
+    })
+  }
+
+  // 取消完成后询问是否保存结果；只有点“保存结果”才保留
+  useEffect(() => {
+    if (!job || job.status !== 'cancelled' || !cancelRequested) return
+    if (promptedRef.current === job.id) return
+    promptedRef.current = job.id
+    modal.confirm({
+      title: '是否保存本次采集结果？',
+      content: '选择「不保存」会删除本次批次已经采集到的数据，且不可恢复。',
+      okText: '保存结果',
+      cancelText: '不保存并删除',
+      closable: false,
+      maskClosable: false,
+      onOk: () => {
+        setRunOpen(false)
+        message.success('本次结果已保存')
+      },
+      onCancel: async () => {
+        try {
+          await api.discardJob(job.id)
+          message.success('本次结果已丢弃')
+        } catch (e: any) {
+          message.error(e.message || '丢弃结果失败')
+        } finally {
+          setRunOpen(false)
+        }
+      },
+    })
+  }, [job?.status, job?.id, cancelRequested, modal, message])
 
   const openLogin = async () => {
     setLoginRunning(true)
@@ -157,6 +231,9 @@ export default function CollectPanel() {
       const created = await api.continueJob(job.id, platform)
       jobRef.current = created.id
       setJob(created)
+      setRunOpen(true)
+      setCancelRequested(false)
+      promptedRef.current = null
       message.info('正在打开登录窗口，请完成登录')
     } catch (e: any) {
       message.error(e.message || '启动登录失败')
@@ -346,6 +423,7 @@ export default function CollectPanel() {
                     paused_captcha: '待人工处理',
                     failed: '失败',
                     done: '已完成',
+                    cancelled: '已取消',
                   }
                   const color =
                     s.status === 'done'
@@ -469,8 +547,25 @@ export default function CollectPanel() {
             />
           )}
           {job.status === 'failed' && job.error && (
-            <Alert type="error" showIcon style={{ marginTop: 12 }} message={job.error} />
+            <Alert
+              type="error"
+              showIcon
+              style={{ marginTop: 12 }}
+              message={job.error}
+              description={
+                (() => {
+                  const hint = explainError(job.error)
+                  return hint ? `${hint.reason} 建议：${hint.advice}` : undefined
+                })()
+              }
+            />
           )}
+          <RunModal
+            open={runOpen}
+            job={job}
+            report={report}
+            onCloseRequest={requestClose}
+          />
         </Card>
       )}
     </>

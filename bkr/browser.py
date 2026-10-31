@@ -118,6 +118,11 @@ def _kill_profile_browsers(profile: Path) -> None:
         pass
 
 
+def kill_profile_browsers(profile: Path) -> None:
+    """公开入口：结束使用指定 profile 目录的浏览器进程（取消任务时兜底清理）。"""
+    _kill_profile_browsers(profile)
+
+
 def launch_context(p, headless: bool = False, kill_stale: bool = False, profile_dir=None,
                    platform: str | None = None):
     """返回 BrowserContext。
@@ -347,11 +352,12 @@ def human_move(page, x: float, y: float) -> None:
         pass
 
 
-def wait_for_login(ctx, site: str = "taobao", timeout: int = 300, poll: float = 2.0):
+def wait_for_login(ctx, site: str = "taobao", timeout: int = 300, poll: float = 2.0,
+                   cancel_event=None):
     """打开站点登录页并等待完整登录态。
 
     返回 (ok, reason)：ok=True 表示连续两次检测到完整登录；
-    reason: ok / timeout / closed。
+    reason: ok / timeout / closed / cancelled。
     """
     site = (site or "taobao").strip().lower()
     target = {
@@ -364,6 +370,8 @@ def wait_for_login(ctx, site: str = "taobao", timeout: int = 300, poll: float = 
     hits = 0
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if cancel_event is not None and cancel_event.is_set():
+            return False, "cancelled"
         if page.is_closed():
             return False, "closed"
         try:

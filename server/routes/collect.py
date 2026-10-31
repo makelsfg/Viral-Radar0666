@@ -123,6 +123,28 @@ def job_status(job_id: str):
     return job
 
 
+@router.post("/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    """结束本次采集：终止 worker 进程树与浏览器，任务进入 cancelled。"""
+    if not manager.get(job_id):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    ok, msg = manager.cancel(job_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"ok": True, "message": msg}
+
+
+@router.post("/jobs/{job_id}/discard")
+def discard_job(job_id: str):
+    """用户选择不保存时，删除本批次已采结果。"""
+    if not manager.get(job_id):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    ok, msg = manager.discard(job_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"ok": True, "message": msg}
+
+
 class ContinueRequest(BaseModel):
     platform: str | None = None
 

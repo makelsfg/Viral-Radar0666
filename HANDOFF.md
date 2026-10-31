@@ -1,6 +1,6 @@
 # 爆款雷达 · 交接说明（HANDOFF）
 
-> 当前版本：**0.12.1**（2026-11-01）
+> 当前版本：**0.13.0**（2026-11-01）
 > 项目目录：`E:\agent_培训代码库\爆款分析\baokuan-radar`
 > 新会话请先读本文件 + 项目记忆 `project_baokuan_radar.md`，再继续。
 
@@ -17,7 +17,7 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - 前端：React + TypeScript + Vite + Ant Design 5（`web/`）
 - 后端：FastAPI（`server/`）+ Playwright/patchright（`bkr/`）+ SQLite（`data/radar.db`）
 - 配置：`config/settings.yaml`（浏览器 channel=msedge，engine=auto；当前自动使用 **patchright**；detail.provider=local；LLM key 已配置）
-- 版本探针：`GET /api/health` → 应显示 `0.12.1`、`engine=patchright`、`channel=msedge`
+- 版本探针：`GET /api/health` → 应显示 `0.13.0`、`engine=patchright`、`channel=msedge`
 - 前端四个页签：采集 / 数据 / 分析 / 热词
 
 ## 当前流程
@@ -37,6 +37,15 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 - 每平台仅保留一个工作标签页（列表/详情复用；详情弹窗临时关闭），移除 keep-alive/乱码标签
 - 1688 销量解析兼容"成交 N 笔 / 已售 N 个 / N万+"；详情已售/加购回填快照，数据页可显示并按已售排序
+
+## 最近变更（0.13.0）
+
+- 修复新平台首次运行报“任务不存在 / worker 提前退出”：`start_run` 先 upsert 全部任务到 `dim_task`，worker 才能按 task_id 加载
+- 采集运行弹窗（`web/src/components/RunModal.tsx`）：魔方动画 + 平台进度；× 触发取消
+- 取消：`POST /api/jobs/{id}/cancel`，taskkill /T 结束 worker 进程树、清理各平台 profile 的 Edge 进程；任务置 cancelled
+- 不保存：`POST /api/jobs/{id}/discard` 删除该批次快照/批次记录并清理孤儿商品与 raw 文件
+- 常见报错原因与建议：`RunModal.explainError`，同时用于采集页错误提示
+- 平台启动默认错峰 75s→20s（`BK_PARALLEL_STAGGER` 可调）
 
 ## 最近变更（0.12.1）
 

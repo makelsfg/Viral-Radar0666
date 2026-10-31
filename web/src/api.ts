@@ -50,6 +50,10 @@ export const api = {
       body: JSON.stringify({ platform: platform ?? null }),
     }),
   job: (jobId: string) => request<JobState>(`/api/jobs/${jobId}`),
+  cancelJob: (jobId: string) =>
+    request<{ ok: boolean; message: string }>(`/api/jobs/${jobId}/cancel`, { method: 'POST' }),
+  discardJob: (jobId: string) =>
+    request<{ ok: boolean; message: string }>(`/api/jobs/${jobId}/discard`, { method: 'POST' }),
   reportMeta: (batch: string) =>
     request<ReportMeta>(`/api/report/meta?batch=${encodeURIComponent(batch)}`),
   tasks: () => request<TaskInfo[]>('/api/tasks'),
