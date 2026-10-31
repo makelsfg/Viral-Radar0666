@@ -379,11 +379,16 @@ def wait_for_login(ctx, site: str = "taobao", timeout: int = 300, poll: float = 
         )
         if site == "1688":
             cookie_ok = bool({"__cn_logon__", "_cn_"} & names)
+            ok_now = cookie_ok and not on_login
         elif site == "pdd":
+            # 拼多多 H5 登录成功后可能仍停留在 login.html（SPA 不换 URL），
+            # 但 PDDAccessToken / pdd_user_id 已落盘，这已经是可靠登录态。
             cookie_ok = has_pdd_login_cookies(names)
+            ok_now = cookie_ok
         else:
             cookie_ok = has_login_cookies(names)
-        if cookie_ok and not on_login:
+            ok_now = cookie_ok and not on_login
+        if ok_now:
             hits += 1
             if hits >= 2:
                 time.sleep(2)  # 等 cookie 落盘
@@ -391,6 +396,14 @@ def wait_for_login(ctx, site: str = "taobao", timeout: int = 300, poll: float = 
         else:
             hits = 0
         time.sleep(poll)
+    if site == "pdd":
+        try:
+            interesting = sorted(
+                n for n in names if "pdd" in n.lower() or "token" in n.lower()
+            )
+            print(f"[login] 拼多多登录等待超时：url={url} 相关 cookie={interesting}")
+        except Exception:
+            pass
     return False, "timeout"
 
 

@@ -140,7 +140,7 @@ export default function CollectPanel() {
             : 'tmall'
       const site = profile === '1688' ? '1688' : profile === 'pdd' ? 'pdd' : 'taobao'
       await api.login(profile, site)
-      message.info('浏览器已打开，请完成扫码登录，然后点「继续采集」')
+      message.info('浏览器已打开，请完成登录（拼多多为手机号验证码），然后点「继续采集」')
     } catch (e: any) {
       message.error(e.message || '打开登录失败')
     } finally {
@@ -157,7 +157,7 @@ export default function CollectPanel() {
       const created = await api.continueJob(job.id, platform)
       jobRef.current = created.id
       setJob(created)
-      message.info('正在打开登录窗口，请完成扫码')
+      message.info('正在打开登录窗口，请完成登录')
     } catch (e: any) {
       message.error(e.message || '启动登录失败')
     }
@@ -254,7 +254,7 @@ export default function CollectPanel() {
         </Form>
         <div className="hint">
           每页约 40–60 个商品；详情样本数 = 按已售下限从高到低选取的头部商品数（越多越慢、风控压力越大）。
-          1688 / 拼多多首次使用前，请点右上角对应「登录」完成扫码（各平台独立登录）。
+          1688 / 拼多多首次使用前，请点右上角对应「登录」完成登录（各平台独立登录）。
           拼多多为移动网页实验版，选择器可能随平台改版，失败时请查看日志。
         </div>
         {conservative && (
@@ -285,7 +285,7 @@ export default function CollectPanel() {
                 {(job.auth_statuses || []).map((s) => {
                   const text: Record<string, string> = {
                     authorized: '已授权',
-                    logging_in: '等待扫码',
+                    logging_in: '等待登录',
                     unauthorized: '未授权',
                     waiting: '待登录',
                   }
@@ -319,7 +319,7 @@ export default function CollectPanel() {
                   showIcon
                   style={{ marginTop: 12 }}
                   message="登录未完成，采集不会开始"
-                  description="请点击对应平台的「重新登录」，完成扫码后系统会自动开始采集。"
+                  description="请点击对应平台的「重新登录」，完成登录后系统会自动开始采集。"
                 />
               ) : (
                 <Alert
@@ -327,7 +327,7 @@ export default function CollectPanel() {
                   showIcon
                   style={{ marginTop: 12 }}
                   message="登录检查中"
-                  description="请在弹出的浏览器窗口里完成扫码；登录成功后窗口会自动关闭。"
+                  description="请在弹出的浏览器窗口里完成登录；检测到登录态后窗口会自动关闭。"
                 />
               )}
             </div>

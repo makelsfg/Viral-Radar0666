@@ -1,6 +1,6 @@
 # 爆款雷达 · 交接说明（HANDOFF）
 
-> 当前版本：**0.12.0**（2026-11-01）
+> 当前版本：**0.12.1**（2026-11-01）
 > 项目目录：`E:\agent_培训代码库\爆款分析\baokuan-radar`
 > 新会话请先读本文件 + 项目记忆 `project_baokuan_radar.md`，再继续。
 
@@ -17,7 +17,7 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - 前端：React + TypeScript + Vite + Ant Design 5（`web/`）
 - 后端：FastAPI（`server/`）+ Playwright/patchright（`bkr/`）+ SQLite（`data/radar.db`）
 - 配置：`config/settings.yaml`（浏览器 channel=msedge，engine=auto；当前自动使用 **patchright**；detail.provider=local；LLM key 已配置）
-- 版本探针：`GET /api/health` → 应显示 `0.12.0`、`engine=patchright`、`channel=msedge`
+- 版本探针：`GET /api/health` → 应显示 `0.12.1`、`engine=patchright`、`channel=msedge`
 - 前端四个页签：采集 / 数据 / 分析 / 热词
 
 ## 当前流程
@@ -37,6 +37,11 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 - 每平台仅保留一个工作标签页（列表/详情复用；详情弹窗临时关闭），移除 keep-alive/乱码标签
 - 1688 销量解析兼容"成交 N 笔 / 已售 N 个 / N万+"；详情已售/加购回填快照，数据页可显示并按已售排序
+
+## 最近变更（0.12.1）
+
+- 修复拼多多登录误判：登录成功后 H5 可能仍停在 `login.html`，此前 `on_login` 条件导致永远判失败。现在 PDD 以 `PDDAccessToken/pdd_user_id/pdd_user_uin` cookie 为准；关窗后 `_login_platform` 再读一次落盘 cookie 复核
+- 登录文案改为“完成登录”（拼多多是手机号验证码，不是扫码）
 
 ## 最近变更（0.12.0）
 

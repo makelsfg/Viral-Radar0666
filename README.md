@@ -165,7 +165,7 @@ $env:BK_PROFILE="alt"
 
 ## 拼多多（实验版）
 
-- 采集入口为拼多多移动网页 `mobile.yangkeduo.com`（独立 profile `.browser-profile-pdd-msedge`，移动端 UA/视口）；登录后 cookie 出现 `pdd_user_id` / `pdd_user_uin` / `PDDAccessToken` 即视为已授权
+- 采集入口为拼多多移动网页 `mobile.yangkeduo.com`（独立 profile `.browser-profile-pdd-msedge`，移动端 UA/视口）；登录后 cookie 出现 `pdd_user_id` / `pdd_user_uin` / `PDDAccessToken` 即视为已授权。登录成功后页面可能仍停在 `login.html`，这是 SPA 行为，以 cookie 为准，不用等 URL 跳转
 - 搜索页会尝试点击“销量”排序；H5 为无限滚动，页数通过向下滚动加载
 - 拼多多网页风控与改版较频繁，若持续 0 解析或跳登录页：先人工在窗口里确认页面正常，再把 `data/debug/` 现场与 `data/logs/{batch}_pdd.log` 发开发者；长期稳定方案建议接拼多多开放平台/多多进宝或手动导出，不用脚本硬碰
 - 详情页可能要求 App 内打开，失败时该平台标记失败，不影响天猫/1688 的报告导出

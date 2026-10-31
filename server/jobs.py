@@ -174,7 +174,7 @@ class JobManager:
                 s["reason"] = reason
                 label = s["name"].split(" · ")[-1] if " · " in s["name"] else s["name"]
                 if status == "logging_in":
-                    job["message"] = f"正在打开{label}登录窗口，请扫码…"
+                    job["message"] = f"正在打开{label}登录窗口，请完成登录…"
                 elif status == "authorized":
                     job["message"] = f"{label} 已授权"
                 elif status == "unauthorized":
@@ -206,11 +206,15 @@ class JobManager:
                             ctx.storage_state(path=str(state_path_for(platform)))
                         except Exception:
                             pass
-                    return ok, reason
                 finally:
                     close_context(ctx)
                     # 给浏览器进程一点时间释放 profile 与落盘 cookie
                     time.sleep(1.5)
+            # 拼多多登录成功后可能关窗/停在 login.html：关窗后以落盘 cookie 为准再判一次
+            if not ok and is_authorized(platform):
+                ok, reason = True, "ok"
+                print(f"[job] {platform} 浏览器已关闭，但检测到有效登录 cookie，按登录成功处理")
+            return ok, reason
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 
@@ -467,7 +471,7 @@ class JobManager:
             status="waiting",
             profile=profile,
             site=site,
-            message="请在打开的浏览器里扫码登录",
+            message="请在打开的浏览器里完成登录",
         )
         self._publish(job)
         threading.Thread(target=self._run_login, args=(job,), daemon=True).start()

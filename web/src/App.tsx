@@ -65,7 +65,7 @@ export default function App() {
       const job = await api.login(profile, site)
       loginRef.current = job.id
       setLoginRunning(profile)
-      message.info('浏览器已打开，请扫码登录；检测到完整登录态后自动完成')
+      message.info('浏览器已打开，请完成登录（拼多多为手机号验证码）；检测到登录态后自动完成')
     } catch (e: any) {
       message.error(e.message || '启动登录失败')
     }
