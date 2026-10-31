@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from bkr import db
 from bkr.config import RAW_DIR
 from bkr.parse import parse_price
+from ..utils import is_allowed_image_url, proxied_image
 
 router = APIRouter()
 
@@ -78,6 +79,7 @@ def products(
     task_id: str = Query(...),
     batch: str = Query(...),
     only_detail: int = Query(default=1),
+    proxy_images: int = Query(default=1),
 ):
     conn = db.connect()
     try:
@@ -116,7 +118,7 @@ def products(
                 "item_id": r["item_id"],
                 "platform": r["platform"],
                 "title": r["title"],
-                "image_url": r["image_url"],
+                "image_url": proxied_image(r["platform"], r["image_url"]) if proxy_images else r["image_url"],
                 "price_final": price_final,
                 "sold_text": r["sold_text"],
                 "sold_lb": r["sold_lb"],
@@ -156,7 +158,7 @@ def product(item_id: str, platform: str = Query(default="tmall")):
         "item_id": item_id,
         "platform": platform,
         "title": p["title"],
-        "image_url": p["image_url"],
+        "image_url": proxied_image(platform, p["image_url"]),
         "video_url": p["video_url"],
         "shop_name": p["shop_name"],
         "shop_rating": p["shop_rating"],
@@ -214,9 +216,40 @@ def delete_batch(task_id: str, batch: str):
     return {"ok": True}
 
 
+@router.get("/image")
+def image_proxy(url: str = Query(...)):
+    """1688 图片防盗链代理：只允许 alicdn.com 的 https 图片。"""
+    if not is_allowed_image_url(url):
+        raise HTTPException(status_code=400, detail="不允许的图片地址")
+    try:
+        import requests
+
+        resp = requests.get(
+            url,
+            headers={
+                "Referer": "https://detail.1688.com/",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+                ),
+            },
+            timeout=20,
+            stream=True,
+        )
+        resp.raise_for_status()
+        ctype = resp.headers.get("Content-Type", "image/jpeg")
+        return StreamingResponse(
+            resp.iter_content(64 * 1024),
+            media_type=ctype,
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"图片代理失败：{exc}") from exc
+
+
 @router.get("/export")
 def export(task_id: str, batch: str, only_detail: int = 1):
-    rows = products(task_id=task_id, batch=batch, only_detail=only_detail)
+    rows = products(task_id=task_id, batch=batch, only_detail=only_detail, proxy_images=0)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(

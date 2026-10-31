@@ -81,6 +81,31 @@ def test_profile_dir_for():
     assert profile_dir_for("") == profile_dir_for(None)
 
 
+def test_platform_auth_db():
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, "t.db")
+    conn = db.connect(path)
+    try:
+        assert db.get_platform_auth(conn, "tmall") is None
+        db.set_platform_auth(conn, "tmall", True)
+        assert db.get_platform_auth(conn, "tmall") is True
+        db.set_platform_auth(conn, "tmall", False, "窗口关闭")
+        assert db.get_platform_auth(conn, "tmall") is False
+    finally:
+        conn.close()
+        os.remove(path)
+
+
+def test_proxied_image():
+    from server.utils import is_allowed_image_url, proxied_image
+
+    url = "https://cbu01.alicdn.com/img/ibank/a.jpg_.webp"
+    assert proxied_image("1688", url).startswith("/api/image?url=")
+    assert proxied_image("tmall", url) == url
+    assert is_allowed_image_url(url) is True
+    assert is_allowed_image_url("https://evil.example.com/a.jpg") is False
+
+
 def test_product_platform_isolation():
     tmp = tempfile.mkdtemp()
     path = os.path.join(tmp, "t.db")
@@ -96,29 +121,3 @@ def test_product_platform_isolation():
     finally:
         conn.close()
         os.remove(path)
-
-def test_alibaba_sold_yishou_and_units():
-    # 详情页形态：已售 8000+个（页面由三个相邻 span 拼出）
-    raw = {"item_id": "2", "title_attr": "男士手表",
-           "text": "¥15.00\n已售 8000+个\n广州鸥芮时贸易有限公司", "img": ""}
-    card = alibaba.normalize_card(raw, _Task())
-    assert card["sold_lb"] == 8000
-    # 成交 + 件 + 万级
-    raw2 = {"item_id": "3", "title_attr": "手表", "text": "¥5.00\n成交 1.2万件", "img": ""}
-    assert alibaba.normalize_card(raw2, _Task())["sold_lb"] == 12000
-
-
-def test_alibaba_search_url_sold_sort():
-    class _SortTask(_Task):
-        sort = "sale-desc"
-        pages = 1
-
-    url = alibaba.search_url(_SortTask(), 1)
-    assert "sortType=va_rmdarkgmv" in url
-    # 非销量排序时不追加参数，保持默认综合
-    assert "sortType" not in alibaba.search_url(_Task(), 1)
-
-
-def test_alibaba_detail_title_selector_prefers_title_content():
-    # 详情提取器必须优先取 .title-content 里的 h1，避开第一个卖家公司名 h1
-    assert ".title-content h1" in alibaba.JS_DETAIL

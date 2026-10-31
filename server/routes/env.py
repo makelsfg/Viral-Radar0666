@@ -9,7 +9,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from bkr import __version__
-from bkr.auth import cookie_names, is_authorized
+from bkr import db as dbm
+from bkr.auth import effective_authorized
 from bkr.browser import CDP_URL, browser_channel, engine_name
 from bkr.config import profile_dir_for
 
@@ -44,12 +45,25 @@ def health():
 
 @router.get("/env")
 def env():
+    busy = manager.active()
+
+    def status(platform: str) -> bool:
+        if not busy:
+            return effective_authorized(platform)
+        # 采集进行中 Edge 会锁 Cookies：直接返回数据库里的授权状态，避免翻红
+        conn = dbm.connect()
+        try:
+            stored = dbm.get_platform_auth(conn, platform)
+        finally:
+            conn.close()
+        return bool(stored)
+
     return {
-        "logged_in": is_authorized("tmall"),
-        "busy": manager.active(),
+        "logged_in": status("tmall"),
+        "busy": busy,
         "profiles": {
-            "tmall": is_authorized("tmall"),
-            "1688": is_authorized("1688"),
+            "tmall": status("tmall"),
+            "1688": status("1688"),
         },
     }
 

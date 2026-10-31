@@ -91,6 +91,13 @@ CREATE TABLE IF NOT EXISTS hot_word (
   created_at TEXT NOT NULL,
   UNIQUE (keyword, word)
 );
+
+CREATE TABLE IF NOT EXISTS platform_auth (
+  platform    TEXT PRIMARY KEY,
+  authorized  INTEGER NOT NULL DEFAULT 0,
+  updated_at  TEXT NOT NULL,
+  note        TEXT
+);
 """
 
 
@@ -264,25 +271,11 @@ def upsert_snapshot(
     )
 
 
-def set_snapshot_detail(
-    conn,
-    task_id: str,
-    item_id: str,
-    batch: str,
-    price_final: float | None,
-    cart_text: str | None = None,
-    cart_lb: int | None = None,
-    sold_text: str | None = None,
-    sold_lb: int | None = None,
-) -> None:
-    """详情阶段回写：价格一定覆盖；加购以详情为准；已售仅在列表缺失时补。"""
+def set_snapshot_detail(conn, task_id: str, item_id: str, batch: str, price_final: float | None) -> None:
     conn.execute(
-        """UPDATE fact_snapshot SET price_final=?, is_detail=1,
-             cart_text=COALESCE(?, cart_text), cart_lb=COALESCE(?, cart_lb),
-             sold_text=COALESCE(sold_text, ?), sold_lb=COALESCE(sold_lb, ?)
+        """UPDATE fact_snapshot SET price_final=?, is_detail=1
            WHERE task_id=? AND item_id=? AND batch=?""",
-        (price_final, cart_text, cart_lb, sold_text, sold_lb,
-         task_id, item_id, batch),
+        (price_final, task_id, item_id, batch),
     )
     conn.commit()
 
@@ -378,3 +371,22 @@ def hotword_keywords(conn) -> list[dict]:
            FROM hot_word GROUP BY keyword ORDER BY last_at DESC"""
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def set_platform_auth(conn, platform: str, authorized: bool, note: str | None = None) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    conn.execute(
+        """INSERT INTO platform_auth(platform, authorized, updated_at, note)
+           VALUES(?,?,?,?)
+           ON CONFLICT(platform) DO UPDATE SET
+             authorized=excluded.authorized, updated_at=excluded.updated_at, note=excluded.note""",
+        (platform, 1 if authorized else 0, now, note),
+    )
+    conn.commit()
+
+
+def get_platform_auth(conn, platform: str) -> bool | None:
+    row = conn.execute(
+        "SELECT authorized FROM platform_auth WHERE platform=?", (platform,)
+    ).fetchone()
+    return bool(row["authorized"]) if row else None

@@ -24,7 +24,7 @@ class CollectRequest(BaseModel):
     platforms: list[str] = Field(default_factory=lambda: ["tmall"])
     pages: int = Field(default=1, ge=1, le=10)
     detail_top: int = Field(default=6, ge=0, le=200)
-    detail_order: str = Field(default="rank", pattern="^(rank|sold)$")
+    detail_order: str = Field(default="sold", pattern="^(rank|sold)$")
     pace: str = Field(default="safe", pattern="^(safe|balanced|fast)$")
     mode: str = Field(default="standard", pattern="^(standard|conservative)$")
     price_min: float | None = Field(default=None, ge=0)
@@ -61,7 +61,7 @@ def _task_from_db(task_id: str) -> Task:
         sort=r["sort"] or "sale-desc",
         pages=int(r["pages"] or 1),
         detail_top=int(r["detail_top"] or 6),
-        detail_order=str(r["detail_order"] or "rank"),
+        detail_order=str(r["detail_order"] or "sold"),
         price_min=r["price_min"],
         price_max=r["price_max"],
         exclude_words=_loads(r["exclude_words"], []),

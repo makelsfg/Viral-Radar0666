@@ -11,6 +11,7 @@ from bkr import db
 from bkr.analysis import build_summary
 from bkr.analysis_profile import profile_for
 from bkr.parse import parse_price
+from ..utils import proxied_image
 
 router = APIRouter()
 
@@ -69,7 +70,7 @@ def _rows(task_id: str, batch: str) -> list[dict]:
                 "sold_text": r["sold_text"],
                 "cart_lb": r["cart_lb"],
                 "shop_name": r["shop_name"],
-                "image_url": r["image_url"],
+                "image_url": proxied_image(r["platform"], r["image_url"]),
                 "product_url": r["product_url"]
                 or f"https://detail.tmall.com/item.htm?id={r['item_id']}",
                 "params": _loads(r["params_json"], {}),

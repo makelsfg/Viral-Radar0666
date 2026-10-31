@@ -34,7 +34,7 @@ def _query_names(db_path: Path) -> set[str]:
         conn.close()
 
 
-def cookie_names(platform: str) -> set[str]:
+def _read_names(platform: str) -> set[str]:
     d = profile_dir_for(platform)
     candidates = [d / "Default" / "Network" / "Cookies", d / "Default" / "Cookies"]
     cookie_file = next((p for p in candidates if p.exists()), None)
@@ -53,8 +53,6 @@ def cookie_names(platform: str) -> set[str]:
             os.close(fd)
             shutil.copy2(cookie_file, tmp_path)
             return _query_names(tmp_path)
-        except Exception:
-            return set()
         finally:
             if tmp_path is not None:
                 try:
@@ -63,13 +61,48 @@ def cookie_names(platform: str) -> set[str]:
                     pass
 
 
-def is_authorized(platform: str) -> bool:
-    names = cookie_names(platform)
+def cookie_names(platform: str) -> set[str]:
+    try:
+        return _read_names(platform)
+    except Exception:
+        return set()
+
+
+def _authorized_from_names(platform: str, names: set[str]) -> bool:
     if platform == "tmall":
         return has_login_cookies(names)
     if platform == "1688":
         return bool({"__cn_logon__", "_cn_"} & names)
     return False
+
+
+def is_authorized(platform: str) -> bool:
+    return _authorized_from_names(platform, cookie_names(platform))
+
+
+def probe_authorized(platform: str) -> tuple[bool, bool]:
+    """返回 (是否授权, 结果是否可靠)。读不到 cookie 文件时 reliable=False。"""
+    try:
+        names = _read_names(platform)
+    except Exception:
+        return False, False
+    return _authorized_from_names(platform, names), True
+
+
+def effective_authorized(platform: str) -> bool:
+    """UI 展示用：优先实时检查；文件被锁时回退到数据库里的授权状态。"""
+    from . import db
+
+    ok, reliable = probe_authorized(platform)
+    conn = db.connect()
+    try:
+        if reliable:
+            db.set_platform_auth(conn, platform, ok)
+            return ok
+        stored = db.get_platform_auth(conn, platform)
+        return bool(stored)
+    finally:
+        conn.close()
 
 
 def login_site(platform: str) -> str:

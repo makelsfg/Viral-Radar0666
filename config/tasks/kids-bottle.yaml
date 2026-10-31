@@ -8,7 +8,7 @@ entry:
   sort: sale-desc      # 销量降序
   pages: 1             # 每批扫描页数（与 Web/PRD 口径一致）
 detail_top: 6          # 进详情页的商品数
-detail_order: rank     # rank=页面顺序（拟人，默认）；sold=已售优先
+detail_order: sold     # sold=按已售下限（默认）；rank=页面顺序
 price_min: 30
 price_max: 300
 exclude_words: ["配件", "替换", "杯套仅", "维修"]

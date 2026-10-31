@@ -107,7 +107,7 @@ class Task:
     sort: str = "sale-desc"
     pages: int = 1
     detail_top: int = 6
-    detail_order: str = "rank"  # rank=按页面顺序（拟人，默认）；sold=按已售排序
+    detail_order: str = "sold"  # sold=按已售下限（默认）；rank=页面顺序
     price_min: float | None = None
     price_max: float | None = None
     exclude_words: list[str] = field(default_factory=list)
@@ -149,7 +149,7 @@ def load_task(path: str | Path) -> Task:
         sort=str(entry.get("sort") or raw.get("sort") or "sale-desc"),
         pages=int(raw.get("pages", entry.get("pages", 2))),
         detail_top=int(raw.get("detail_top", 20)),
-        detail_order=str(raw.get("detail_order") or "rank"),
+        detail_order=str(raw.get("detail_order") or "sold"),
         price_min=_opt_float(raw.get("price_min")),
         price_max=_opt_float(raw.get("price_max")),
         exclude_words=[str(w) for w in (raw.get("exclude_words") or [])],

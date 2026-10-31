@@ -179,6 +179,14 @@ class JobManager:
                     job["message"] = f"{label} 已授权"
                 elif status == "unauthorized":
                     job["message"] = f"{label} 未授权：{reason or '请重新登录'}"
+        try:
+            conn = db.connect()
+            try:
+                db.set_platform_auth(conn, platform, status == "authorized", reason)
+            finally:
+                conn.close()
+        except Exception:
+            pass
         self._publish(job)
 
     def _login_platform(self, platform: str) -> tuple[bool, str]:
@@ -235,6 +243,15 @@ class JobManager:
     ) -> None:
         try:
             job["auth_statuses"] = self._auth_statuses(tasks)
+            for s in job["auth_statuses"]:
+                try:
+                    conn = db.connect()
+                    try:
+                        db.set_platform_auth(conn, s["platform"], s["status"] == "authorized")
+                    finally:
+                        conn.close()
+                except Exception:
+                    pass
             self._publish(job)
 
             for task in tasks:
@@ -473,12 +490,28 @@ class JobManager:
                             pass
                         job["status"] = "done"
                         job["message"] = f"{site} 登录成功"
+                        try:
+                            conn = db.connect()
+                            try:
+                                db.set_platform_auth(conn, profile, True)
+                            finally:
+                                conn.close()
+                        except Exception:
+                            pass
                     else:
                         job["status"] = "timeout" if reason == "timeout" else "failed"
                         job["message"] = {
                             "closed": f"{site} 登录窗口被关闭",
                             "timeout": f"{site} 登录超时，请重试",
                         }.get(reason, f"登录失败：{reason}")
+                        try:
+                            conn = db.connect()
+                            try:
+                                db.set_platform_auth(conn, profile, False, job["message"])
+                            finally:
+                                conn.close()
+                        except Exception:
+                            pass
                 finally:
                     close_context(ctx)
         except Exception as exc:  # noqa: BLE001

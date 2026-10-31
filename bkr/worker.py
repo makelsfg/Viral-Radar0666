@@ -39,7 +39,7 @@ def load_task(task_id: str) -> Task:
         sort=r["sort"] or "sale-desc",
         pages=int(r["pages"] or 1),
         detail_top=int(r["detail_top"] or 6),
-        detail_order=str(r["detail_order"] or "rank"),
+        detail_order=str(r["detail_order"] or "sold"),
         price_min=r["price_min"],
         price_max=r["price_max"],
         exclude_words=_loads(r["exclude_words"], []),

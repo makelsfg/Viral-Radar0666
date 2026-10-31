@@ -85,14 +85,12 @@ export default function CollectPanel() {
             : ['tmall'],
         pages: values.pages ?? 1,
         detail_top: values.detail_top ?? 0,
+        detail_order: 'sold',
         pace: values.pace ?? 'safe',
         mode: conservative ? 'conservative' : 'standard',
         price_min: values.price_min ?? null,
         price_max: values.price_max ?? null,
-        exclude_words: String(values.exclude_words || '')
-          .split(/[,，]/)
-          .map((s) => s.trim())
-          .filter(Boolean),
+        exclude_words: [],
       })
       jobRef.current = created.id
       setJob(created)
@@ -226,9 +224,6 @@ export default function CollectPanel() {
           <Form.Item name="price_max" label="价格上限">
             <InputNumber min={0} prefix="¥" style={{ width: 110 }} />
           </Form.Item>
-          <Form.Item name="exclude_words" label="排除词">
-            <Input placeholder="逗号分隔，如：配件,替换" style={{ width: 190 }} allowClear />
-          </Form.Item>
           <Form.Item>
             <Button type="primary" htmlType="submit" icon={<PlayCircleOutlined />}>
               开始采集
@@ -236,7 +231,7 @@ export default function CollectPanel() {
           </Form.Item>
         </Form>
         <div className="hint">
-          每页约 40–60 个商品；详情样本数 = 进入详情页采集的头部商品数（越多越慢、风控压力越大）。
+          每页约 40–60 个商品；详情样本数 = 按已售下限从高到低选取的头部商品数（越多越慢、风控压力越大）。
           1688 首次使用前，请点右上角「登录1688」完成扫码（两平台各自独立登录）。
         </div>
         {conservative && (
