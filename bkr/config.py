@@ -69,6 +69,29 @@ def _apply_settings_to_env(settings: dict) -> None:
         if pdd.get("pid"):
             os.environ.setdefault("BK_PDD_PID", str(pdd["pid"]).strip())
 
+    expert = settings.get("expert") or {}
+    if isinstance(expert, dict):
+        for key, env in (
+            ("max_rounds", "BK_EXPERT_MAX_ROUNDS"),
+            ("pass_score", "BK_EXPERT_PASS_SCORE"),
+            ("temperature", "BK_EXPERT_TEMPERATURE"),
+            ("max_tokens", "BK_EXPERT_MAX_TOKENS"),
+        ):
+            if expert.get(key) not in (None, ""):
+                os.environ.setdefault(env, str(expert[key]).strip())
+        for role in ("writer", "reviewer"):
+            section = expert.get(role) or {}
+            if not isinstance(section, dict):
+                continue
+            prefix = f"BK_EXPERT_{role.upper()}_"
+            for key, env in (
+                ("base_url", prefix + "BASE_URL"),
+                ("api_key", prefix + "API_KEY"),
+                ("model", prefix + "MODEL"),
+            ):
+                if section.get(key):
+                    os.environ.setdefault(env, str(section[key]).strip())
+
 
 _apply_settings_to_env(_load_settings())
 

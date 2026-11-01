@@ -1,6 +1,6 @@
 # 爆款雷达 · 交接说明（HANDOFF）
 
-> 当前版本：**0.14.0**（2026-11-01）
+> 当前版本：**0.15.0**（2026-11-01）
 > 项目目录：`E:\agent_培训代码库\爆款分析\baokuan-radar`
 > 新会话请先读本文件 + 项目记忆 `project_baokuan_radar.md`，再继续。
 
@@ -17,8 +17,8 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - 前端：React + TypeScript + Vite + Ant Design 5（`web/`）
 - 后端：FastAPI（`server/`）+ Playwright/patchright（`bkr/`）+ SQLite（`data/radar.db`）
 - 配置：`config/settings.yaml`（浏览器 channel=msedge，engine=auto；当前自动使用 **patchright**；detail.provider=local；LLM key 已配置）
-- 版本探针：`GET /api/health` → 应显示 `0.14.0`、`engine=patchright`、`channel=msedge`
-- 前端四个页签：采集 / 数据 / 分析 / 热词
+- 版本探针：`GET /api/health` → 应显示 `0.15.0`、`engine=patchright`、`channel=msedge`
+- 前端五个页签：采集 / 数据 / 分析 / 大佬分析 / 热词
 
 ## 当前流程
 
@@ -37,6 +37,16 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 - 每平台仅保留一个工作标签页（列表/详情复用；详情弹窗临时关闭），移除 keep-alive/乱码标签
 - 1688 销量解析兼容"成交 N 笔 / 已售 N 个 / N万+"；详情已售/加购回填快照，数据页可显示并按已售排序
+
+## 最近变更（0.15.0）
+
+- 新增「大佬分析」双 Agent：`bkr/expert/`（evidence/tools/prompts/graph/store/service）
+- LangGraph 状态机：证据 → 大佬写稿 → 审查 → 打回重写（最多 3 轮）→ 通过 / needs_human
+- 审查严格 JSON（五维评分 + blocker + fix），代码侧再校验通过硬条件
+- 新表 `expert_run` / `expert_round`；API `/api/expert/runs`、cancel/delete/export；SSE `type=expert`
+- 前端新增「大佬分析」页签：批次多选、上传报告、笔记、轮次时间线、Markdown 报告、下载
+- 两个模型分别配置：`settings.yaml → expert.writer / expert.reviewer`（留空回退 `llm`）
+- 依赖新增 langchain / langchain-openai / langgraph / rank-bm25；前端新增 react-markdown / remark-gfm
 
 ## 最近变更（0.14.0）
 
@@ -94,6 +104,7 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - `bkr/platforms/pinduoduo.py`：拼多多 H5 适配（实验版）
 - `bkr/sort_ui.py`：页面排序点击/选中态校验（天猫销量、1688 销量/成交额、拼多多销量）
 - `server/routes/data.py`：`/api/report` 合并报告、`/api/report/meta`、导出命名
+- `bkr/expert/`：大佬分析（evidence/tools/prompts/graph/store/service）；`server/routes/expert.py`；`web/src/panels/ExpertPanel.tsx`
 - `bkr/auth.py`：平台授权判定（tmall cookie2+unb；1688 __cn_logon__/_cn_；读 cookie 带锁副本）
 - `server/jobs.py`：auth 前置 → 并行 worker、SSE 事件、日志
 - `server/routes/collect.py`：/api/collect、/api/jobs/{id}/continue、resume

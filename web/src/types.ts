@@ -119,6 +119,56 @@ export interface ReportMeta {
   }[]
 }
 
+export interface ExpertSource {
+  type: 'batch' | 'report' | 'note'
+  task_id?: string
+  batch?: string
+  name?: string
+  content?: string
+}
+
+export interface ExpertReviewIssue {
+  severity?: string
+  location?: string
+  problem?: string
+  fix?: string
+  evidence_ids?: string[]
+}
+
+export interface ExpertReview {
+  verdict?: 'pass' | 'revise'
+  score?: number
+  dimension_scores?: Record<string, number>
+  issues?: ExpertReviewIssue[]
+  summary?: string
+}
+
+export interface ExpertRound {
+  round_no: number
+  stage: 'draft' | 'review' | 'revise'
+  content_md?: string | null
+  review?: ExpertReview | null
+  verdict?: string | null
+  score?: number | null
+  created_at?: string
+}
+
+export interface ExpertRun {
+  id: string
+  title: string
+  keyword?: string
+  status: string
+  iterations?: number
+  max_rounds?: number
+  pass_score?: number
+  final_report_md?: string | null
+  error?: string | null
+  created_at?: string
+  finished_at?: string | null
+  sources?: ExpertSource[]
+  rounds?: ExpertRound[]
+}
+
 export interface HotwordKeyword {
   keyword: string
   last_at: string

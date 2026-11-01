@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from bkr.config import ROOT
 from server.jobs import bus
-from server.routes import analysis, collect, data, env, events, hotwords
+from server.routes import analysis, collect, data, env, events, expert, hotwords
 
 
 @asynccontextmanager
@@ -25,7 +25,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="爆款雷达", version="0.14.0", lifespan=lifespan)
+app = FastAPI(title="爆款雷达", version="0.15.0", lifespan=lifespan)
 
 app.include_router(events.router, prefix="/api")
 app.include_router(env.router, prefix="/api")
@@ -33,6 +33,7 @@ app.include_router(data.router, prefix="/api")
 app.include_router(collect.router, prefix="/api")
 app.include_router(analysis.router, prefix="/api")
 app.include_router(hotwords.router, prefix="/api")
+app.include_router(expert.router, prefix="/api")
 
 
 DIST = ROOT / "web" / "dist"

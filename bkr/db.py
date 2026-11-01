@@ -98,6 +98,33 @@ CREATE TABLE IF NOT EXISTS platform_auth (
   updated_at  TEXT NOT NULL,
   note        TEXT
 );
+
+CREATE TABLE IF NOT EXISTS expert_run (
+  id             TEXT PRIMARY KEY,
+  title          TEXT NOT NULL,
+  keyword        TEXT,
+  sources_json   TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  max_rounds     INTEGER NOT NULL DEFAULT 3,
+  pass_score     INTEGER NOT NULL DEFAULT 85,
+  iterations     INTEGER DEFAULT 0,
+  final_report_md TEXT,
+  error          TEXT,
+  created_at     TEXT,
+  finished_at    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS expert_round (
+  run_id       TEXT NOT NULL,
+  round_no     INTEGER NOT NULL,
+  stage        TEXT NOT NULL,
+  content_md   TEXT,
+  review_json  TEXT,
+  verdict      TEXT,
+  score        INTEGER,
+  created_at   TEXT,
+  PRIMARY KEY (run_id, round_no, stage)
+);
 """
 
 

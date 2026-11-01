@@ -1,6 +1,8 @@
 import type {
   AnalysisSummary,
   EnvStatus,
+  ExpertRun,
+  ExpertSource,
   HotwordKeyword,
   HotwordRow,
   JobState,
@@ -56,6 +58,29 @@ export const api = {
     request<{ ok: boolean; message: string }>(`/api/jobs/${jobId}/discard`, { method: 'POST' }),
   reportMeta: (batch: string) =>
     request<ReportMeta>(`/api/report/meta?batch=${encodeURIComponent(batch)}`),
+  expertRuns: (limit = 20) => request<ExpertRun[]>(`/api/expert/runs?limit=${limit}`),
+  expertRun: (id: string) =>
+    request<ExpertRun>(`/api/expert/runs/${encodeURIComponent(id)}`),
+  createExpertRun: (payload: {
+    title: string
+    keyword: string
+    sources: ExpertSource[]
+    max_rounds: number
+    pass_score: number
+  }) =>
+    request<ExpertRun>('/api/expert/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  cancelExpertRun: (id: string) =>
+    request<{ ok: boolean }>(`/api/expert/runs/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+    }),
+  deleteExpertRun: (id: string) =>
+    request<{ ok: boolean }>(`/api/expert/runs/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
   tasks: () => request<TaskInfo[]>('/api/tasks'),
   products: (taskId: string, batch: string, onlyDetail = true) =>
     request<ProductRow[]>(

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { App as AntApp, Button, Layout, Space, Tabs, Tag } from 'antd'
 import {
   BarChartOutlined,
+  BulbOutlined,
   ExperimentOutlined,
   FireOutlined,
   TableOutlined,
@@ -9,6 +10,7 @@ import {
 import AnalysisPanel from './panels/AnalysisPanel'
 import CollectPanel from './panels/CollectPanel'
 import DataPanel from './panels/DataPanel'
+import ExpertPanel from './panels/ExpertPanel'
 import HotwordsPanel from './panels/HotwordsPanel'
 import { api } from './api'
 import { useSse } from './sse'
@@ -156,6 +158,15 @@ export default function App() {
                 </span>
               ),
               children: <AnalysisPanel />,
+            },
+            {
+              key: 'expert',
+              label: (
+                <span>
+                  <BulbOutlined /> 大佬分析
+                </span>
+              ),
+              children: <ExpertPanel />,
             },
             {
               key: 'hotwords',
