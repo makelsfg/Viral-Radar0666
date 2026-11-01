@@ -69,6 +69,9 @@
 >
 > v0.16.5（2026-11-01）：修复"滑块拖不动"。根因：拼多多窗口为移动端仿真（is_mobile/has_touch），滑块组件监听 touch 事件，而桌面鼠标产生 mouse 事件，组件不响应。新增 `enable_mouse_as_touch()`（CDP `Emulation.setEmitTouchEventsForMouse`，仅人工接管/登录窗口启用），人工用鼠标拖动即等同触摸；`pdd-probe` 检测到滑块时也进入人工等待（原版直接退出），拖动通过后自动继续。
 
+>
+> v0.16.6（2026-11-01）：滑块通过后的"无 SSR 状态"恢复。实测点：人工通过滑块后，拼多多返回的是**客户端渲染页**（DOM 有商品文本，但无 `window.rawData` 且无内联 SSR 脚本），导致列表 0 条。`collect_pages`/`pdd-probe` 增加 `_recover_ssr_page()`：读不到 SSR 时**自动重新加载一次搜索页**（每批最多一次），重新等待渲染/必要时再人工接管后解析，正常取得 SSR 20 条。
+
 ---
 
 ## 1. 背景与目标

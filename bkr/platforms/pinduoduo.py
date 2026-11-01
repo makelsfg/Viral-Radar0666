@@ -675,13 +675,8 @@ def _dump_search_page(page) -> str:
     return str(d)
 
 
-def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
-    """搜索页 → 候选列表。优先读 SSR 数据，SSR 失效时退回锚点解析。"""
-    if task.pages > 1:
-        print(f"  [警告] 拼多多为无限滚动搜索，忽略搜索页数 {task.pages}（固定 1 屏）")
-    page = open_search_page(ctx, task, 1)
-
-    cards: list[dict] = []
+def _read_ssr(page) -> dict:
+    """读取 SSR 列表（最多 3 次，间隔 1.2s）。"""
     res: dict = {}
     for _attempt in range(3):
         try:
@@ -691,6 +686,41 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
         if res.get("ok") and (res.get("items") or []):
             break
         page.wait_for_timeout(1200)
+    return res
+
+
+def _recover_ssr_page(page, task) -> bool:
+    """滑块通过后拼多多可能给客户端渲染版（DOM 有商品、无 SSR 原文）。
+
+    此时重新加载一次搜索页以获取服务端渲染版本。每批最多执行一次。
+    """
+    if getattr(page, "_bkr_pdd_reloaded", False):
+        return False
+    url = search_url(task, 1)
+    print("  [恢复] 当前页面没有 SSR 原文（常见于滑块通过后的客户端渲染），重新加载一次搜索页")
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(random.randint(*PAGE_SETTLE_MS))
+        _wait_content(page)
+        _check_or_wait_human(page)
+        _try_sales_sort(page, url)
+        page._bkr_pdd_reloaded = True
+        return True
+    except Exception as exc:
+        print(f"  [恢复][警告] 重新加载失败：{exc}")
+        return False
+
+
+def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
+    """搜索页 → 候选列表。优先读 SSR 数据，SSR 失效时退回锚点解析。"""
+    if task.pages > 1:
+        print(f"  [警告] 拼多多为无限滚动搜索，忽略搜索页数 {task.pages}（固定 1 屏）")
+    page = open_search_page(ctx, task, 1)
+
+    cards: list[dict] = []
+    res = _read_ssr(page)
+    if not (res.get("ok") and (res.get("items") or [])) and _recover_ssr_page(page, task):
+        res = _read_ssr(page)
     if res.get("ok"):
         items = res.get("items") or []
         print(f"  拼多多 SSR 列表 {len(items)} 条（读取方式：{res.get('mode') or 'script'}）")
@@ -886,7 +916,13 @@ def probe(keyword: str = "手表", save_html: bool = True) -> None:
                         print(f"[probe] 现场已保存：{_dump_search_page(page)}")
                     return
 
-            res = page.evaluate(JS_SSR_LIST)
+            res = _read_ssr(page)
+            if not (res.get("ok") and (res.get("items") or [])):
+                class _T:
+                    keywords = [keyword]
+
+                if _recover_ssr_page(page, _T()):
+                    res = _read_ssr(page)
             print(f"[probe] SSR 可用：{res.get('ok')}，读取方式：{res.get('mode') or '—'}，原因：{res.get('why') or '—'}")
             print(f"[probe] SSR 条数（排序前）：{res.get('count')}")
             keys = res.get("keys") or []
