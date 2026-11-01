@@ -68,6 +68,21 @@ def _apply_settings_to_env(settings: dict) -> None:
             cap = 10
         os.environ.setdefault("BK_PDD_DETAIL_BATCH", str(max(1, min(cap, 10))))
 
+    agent = settings.get("agent") or {}
+    if isinstance(agent, dict):
+        if agent.get("model"):
+            os.environ.setdefault("BK_AGENT_MODEL", str(agent["model"]).strip())
+        if agent.get("enabled") in (True, False):
+            os.environ.setdefault("BK_AGENT_ENABLED", "1" if agent["enabled"] else "0")
+        for key, env in (
+            ("max_steps", "BK_AGENT_MAX_STEPS"),
+            ("max_reloads_per_url", "BK_AGENT_MAX_RELOADS"),
+            ("max_human_wait_s", "BK_AGENT_MAX_HUMAN_WAIT"),
+            ("max_total_seconds", "BK_AGENT_MAX_SECONDS"),
+        ):
+            if agent.get(key) not in (None, ""):
+                os.environ.setdefault(env, str(agent[key]).strip())
+
     expert = settings.get("expert") or {}
     if isinstance(expert, dict):
         for key, env in (

@@ -38,6 +38,8 @@ def health():
         "channel": browser_channel(),
         "cdp": bool(CDP_URL),
         "detail_provider": os.environ.get("BK_DETAIL_PROVIDER", "local"),
+        "agent_enabled": (os.environ.get("BK_AGENT_ENABLED") or "1").strip().lower()
+        not in ("0", "false", "off"),
         "started_at": _STARTED_AT,
         "pid": os.getpid(),
     }

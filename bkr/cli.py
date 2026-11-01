@@ -106,6 +106,41 @@ def cmd_debug_search(args) -> None:
     debug_search(_find_task(args.task), page_no=args.page)
 
 
+def cmd_agent_collect(args) -> None:
+    """采集监督 Agent 调试入口：打开一次搜索页，失败则由 Agent 接管恢复。"""
+    from .agent.runner import supervised_recover
+    from .browser import browser_runtime, close_context, launch_context
+    from .config import profile_dir_for
+    from .platforms import pinduoduo as pdd
+
+    class _Task:
+        platform = "pdd"
+        task_id = "agent-cli"
+        name = f"拼多多 · {args.keyword}"
+        pace = "safe"
+        sort = "sale-desc"
+        pages = 1
+        keywords = [args.keyword]
+        exclude_words = []
+        price_min = None
+        price_max = None
+
+    task = _Task()
+    with browser_runtime() as engine:
+        ctx = launch_context(engine, profile_dir=profile_dir_for("pdd"), platform="pdd")
+        try:
+            page = pdd.open_search_page(ctx, task, 1)
+            res = page.evaluate(pdd.JS_SSR_LIST) or {}
+            print(f"[agent-cli] 确定性路径：SSR 可用={res.get('ok')} 条数={res.get('count')}")
+            result = supervised_recover(page, task, reason="CLI 调试", use_llm=not args.no_llm)
+            print(
+                f"[agent-cli] 结果：{result['status']}；{result['summary']}；"
+                f"候选 {len(result.get('items') or [])}"
+            )
+        finally:
+            close_context(ctx)
+
+
 def cmd_pdd_probe(args) -> None:
     """拼多多实机校准：打开一次搜索页，输出 SSR 路径/字段/滚动前后条数。"""
     from .platforms.pinduoduo import probe
@@ -138,6 +173,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--task", required=True)
     p.add_argument("--page", type=int, default=1)
 
+    p = sub.add_parser("agent-collect", help="采集监督 Agent 调试：打开搜索页并在失败时由 Agent 接管")
+    p.add_argument("--keyword", default="手表")
+    p.add_argument("--no-llm", action="store_true", help="强制规则引擎（不调 LLM）")
+
     p = sub.add_parser("pdd-probe", help="拼多多实机校准：SSR 字段/条数/风控检查（只开 1 次搜索页）")
     p.add_argument("--keyword", default="手表")
     p.add_argument("--save-html", action="store_true", default=True,
@@ -164,6 +203,8 @@ def main(argv=None) -> None:
             cmd_debug_search(args)
         elif args.cmd == "pdd-probe":
             cmd_pdd_probe(args)
+        elif args.cmd == "agent-collect":
+            cmd_agent_collect(args)
     except ConfigError as e:
         print(f"配置错误: {e}")
         raise SystemExit(1)

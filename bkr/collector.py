@@ -189,6 +189,10 @@ def _collect_details_by_click(
 
 def run_task(task, batch: str | None = None, resume: bool = False) -> None:
     batch = batch or batch_id()
+    try:
+        task._batch = batch  # 供采集监督 Agent 记录 agent_run
+    except Exception:
+        pass
     conn = db.connect()
     db.upsert_task(conn, task)
 

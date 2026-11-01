@@ -125,6 +125,32 @@ CREATE TABLE IF NOT EXISTS expert_round (
   created_at   TEXT,
   PRIMARY KEY (run_id, round_no, stage)
 );
+
+CREATE TABLE IF NOT EXISTS agent_run (
+  run_id       TEXT PRIMARY KEY,
+  batch        TEXT,
+  platform     TEXT,
+  task_id      TEXT,
+  status       TEXT,
+  steps        INTEGER DEFAULT 0,
+  llm_calls    INTEGER DEFAULT 0,
+  summary      TEXT,
+  started_at   TEXT,
+  finished_at  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS agent_step (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id       TEXT NOT NULL,
+  idx          INTEGER,
+  state_hash   TEXT,
+  state_json   TEXT,
+  tool         TEXT,
+  args_json    TEXT,
+  result_json  TEXT,
+  thought      TEXT,
+  created_at   TEXT
+);
 """
 
 
@@ -151,6 +177,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     run_cols = {row[1] for row in conn.execute("PRAGMA table_info(batch_run)")}
     if "config_json" not in run_cols:
         conn.execute("ALTER TABLE batch_run ADD COLUMN config_json TEXT")
+    if "agent_recovered" not in run_cols:
+        conn.execute("ALTER TABLE batch_run ADD COLUMN agent_recovered INTEGER DEFAULT 0")
 
     snap_cols = {row[1] for row in conn.execute("PRAGMA table_info(fact_snapshot)")}
     if "platform" not in snap_cols:

@@ -764,6 +764,23 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
             print(f"  [兜底] SSR 不可用，使用 goods.html 锚点解析（{len(cards)} 个）；请把此现象反馈校准 SSR 路径")
 
     if not cards:
+        # 确定性路径失败 → 采集监督 Agent 接管（规则引擎打底，LLM 可选）
+        try:
+            from ..agent.runner import agent_enabled, supervised_recover
+
+            if agent_enabled():
+                result = supervised_recover(page, task, reason="列表解析失败")
+                for it in result.get("items") or []:
+                    c = normalize_ssr_card(it, task)
+                    if c:
+                        c["page_no"] = 1
+                        cards.append(c)
+                if cards:
+                    print(f"  [agent] 恢复候选 {len(cards)} 个（{result.get('summary')}）")
+        except Exception as exc:  # Agent 自身异常不得掩盖原错误
+            print(f"  [agent] 接管异常：{type(exc).__name__}: {exc}")
+
+    if not cards:
         d = _dump_search_page(page)
         raise EmptyResultError(
             f"拼多多搜索页解析到 0 个商品（未登录/风控/改版）。诊断文件：{d}；"

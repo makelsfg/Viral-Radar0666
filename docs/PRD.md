@@ -72,6 +72,9 @@
 >
 > v0.16.6（2026-11-01）：滑块通过后的"无 SSR 状态"恢复。实测点：人工通过滑块后，拼多多返回的是**客户端渲染页**（DOM 有商品文本，但无 `window.rawData` 且无内联 SSR 脚本），导致列表 0 条。`collect_pages`/`pdd-probe` 增加 `_recover_ssr_page()`：读不到 SSR 时**自动重新加载一次搜索页**（每批最多一次），重新等待渲染/必要时再人工接管后解析，正常取得 SSR 20 条。
 
+>
+> v0.17.0（2026-11-01）：**采集监督 Agent（P1）**。确定性路径失败后由带白名单工具的 loop 接管恢复：观察器把页面分类为 slider/login_wall/risk_page/degraded/ssr_ready/client_rendered/empty_results/shell/unknown；9 个工具（extract/settle/scroll/reload/wait_human/click_sort/check_login/save_evidence/finish/escalate）内置预算（滑块≤2、登录≤1、每 URL 重载≤1、steps≤8、总时长≤600s）；LLM 决策失败 2 次即本批切规则引擎；全部步骤写 `agent_run/agent_step`，恢复成功批次打 `batch_run.agent_recovered`。CLI：`python -m bkr.cli agent-collect --keyword 手表 [--no-llm]`；配置 `settings.agent`。红线不变：不调接口、不绕验证、不编造数据。
+
 ---
 
 ## 1. 背景与目标

@@ -1,6 +1,6 @@
 # 爆款雷达 · 交接说明（HANDOFF）
 
-> 当前版本：**0.16.6**（2026-11-01）
+> 当前版本：**0.17.0**（2026-11-01）
 > 项目目录：`E:\agent_培训代码库\爆款分析\baokuan-radar`
 > 新会话请先读本文件 + 项目记忆 `project_baokuan_radar.md`，再继续。
 
@@ -17,7 +17,7 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - 前端：React + TypeScript + Vite + Ant Design 5（`web/`）
 - 后端：FastAPI（`server/`）+ Playwright/patchright（`bkr/`）+ SQLite（`data/radar.db`）
 - 配置：`config/settings.yaml`（浏览器 channel=msedge，engine=auto；当前自动使用 **patchright**；detail.provider=local；LLM key 已配置）
-- 版本探针：`GET /api/health` → 应显示 `0.16.6`、`engine=patchright`、`channel=msedge`
+- 版本探针：`GET /api/health` → 应显示 `0.17.0`、`engine=patchright`、`channel=msedge`
 - 前端五个页签：采集 / 数据 / 分析 / 大佬分析 / 热词
 
 ## 当前流程
@@ -37,6 +37,13 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 - 每平台仅保留一个工作标签页（列表/详情复用；详情弹窗临时关闭），移除 keep-alive/乱码标签
 - 1688 销量解析兼容"成交 N 笔 / 已售 N 个 / N万+"；详情已售/加购回填快照，数据页可显示并按已售排序
+
+## 最近变更（0.17.0）
+
+- **采集监督 Agent（P1）**：`bkr/agent/`（observe/tools/policy/prompts/store/runner/replay）。确定性路径失败后接管：观察分类（滑块/登录/风控/降级/SSR/客户端渲染/空结果/空壳/未知）→ LLM 或规则引擎选工具 → 循环直到拿到候选或 escalate
+- 工具白名单 9 个，预算内置：滑块人工等待≤2、登录≤1、每 URL 重载≤1、steps≤8、总时长≤600s；LLM 连续失败 2 次切规则引擎；所有步骤落 `agent_run/agent_step`，恢复成功批次打 `agent_recovered=1`
+- CLI：`python -m bkr.cli agent-collect --keyword 手表 [--no-llm]`；配置 `settings.agent`；`/api/health` 增 `agent_enabled`
+- 规格：`docs/PROMPT_采集监督Agent.md`（v1.0）；单测 `tests/test_agent.py`。纯后端，无需 npm build
 
 ## 最近变更（0.16.6）
 
@@ -155,5 +162,5 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 ## Git
 
-- 最近提交：`0.16.6`（本文件生成后如未提交，请先 `git add -A && git commit`）
+- 最近提交：`0.17.0`（本文件生成后如未提交，请先 `git add -A && git commit`）
 - 数据/日志/浏览器 profile 均已在 `.gitignore` 中
