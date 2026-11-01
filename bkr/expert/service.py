@@ -14,6 +14,12 @@ class ExpertBusy(RuntimeError):
     pass
 
 
+def default_title(keyword: str) -> str:
+    """标题缺省规则：关键词 + 「大佬分析」；无关键词时用「品类」。"""
+    kw = (keyword or "").strip()
+    return f"{kw} · 大佬分析" if kw else "品类 · 大佬分析"
+
+
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -38,8 +44,9 @@ class ExpertService:
         if not clean:
             raise ValueError("请至少选择一个批次，或上传报告/填写笔记")
         run_id = "ex-" + uuid.uuid4().hex[:10]
+        final_title = self._unique_title(title.strip() or default_title(keyword))
         run = store.create_run(
-            run_id, title.strip() or "大佬分析", keyword.strip(),
+            run_id, final_title, keyword.strip(),
             clean, int(max_rounds), int(pass_score),
         )
         event = threading.Event()
@@ -80,6 +87,23 @@ class ExpertService:
         return store.delete_run(run_id)
 
     # ---------- 内部 ----------
+
+    def _unique_title(self, base: str) -> str:
+        """多个任务不可重名：重名时自动追加 (1)/(2)…"""
+        try:
+            conn = db.connect()
+            try:
+                titles = {r[0] for r in conn.execute("SELECT title FROM expert_run")}
+            finally:
+                conn.close()
+        except Exception:
+            return base
+        if base not in titles:
+            return base
+        n = 1
+        while f"{base}({n})" in titles:
+            n += 1
+        return f"{base}({n})"
 
     def _validate_sources(self, sources: list[dict]) -> list[dict]:
         out = []

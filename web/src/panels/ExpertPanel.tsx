@@ -90,7 +90,6 @@ export default function ExpertPanel() {
   const [passScore, setPassScore] = useState(85)
   const [creating, setCreating] = useState(false)
   const currentRef = useRef<string | null>(null)
-  const refreshTimer = useRef<number | null>(null)
   currentRef.current = current?.id || null
 
   const batchOptions = useMemo(
@@ -104,22 +103,39 @@ export default function ExpertPanel() {
     [tasks],
   )
 
+  const mergeRun = (run: ExpertRun) =>
+    setRuns((prev) => [{ ...run }, ...prev.filter((r) => r.id !== run.id)].slice(0, 20))
+
   const loadRun = async (id: string) => {
     try {
       const run = await api.expertRun(id)
       if (currentRef.current === id) setCurrent(run)
-      setRuns((prev) => {
-        const rest = prev.filter((r) => r.id !== id)
-        return [{ ...run }, ...rest].slice(0, 20)
-      })
+      mergeRun(run)
     } catch {
       /* ignore */
     }
   }
 
+  // 历史记录点击：切换到对应运行（修复此前只刷新不切换的问题）
+  const openRun = async (id: string) => {
+    try {
+      const run = await api.expertRun(id)
+      currentRef.current = run.id
+      setCurrent(run)
+      mergeRun(run)
+    } catch (e: any) {
+      message.error(e.message || '加载记录失败')
+    }
+  }
+
+  const refreshTimers = useRef<Record<string, number>>({})
   const scheduleRefresh = (id: string) => {
-    if (refreshTimer.current) window.clearTimeout(refreshTimer.current)
-    refreshTimer.current = window.setTimeout(() => loadRun(id), 400)
+    const prev = refreshTimers.current[id]
+    if (prev) window.clearTimeout(prev)
+    refreshTimers.current[id] = window.setTimeout(() => {
+      delete refreshTimers.current[id]
+      loadRun(id)
+    }, 400)
   }
 
   useEffect(() => {
@@ -127,10 +143,19 @@ export default function ExpertPanel() {
     api.expertRuns().then(setRuns).catch(() => undefined)
   }, [])
 
+  const anyRunning = runs.some((r) => ['running', 'cancelling'].includes(r.status))
+  useEffect(() => {
+    if (!anyRunning) return
+    const timer = window.setInterval(() => {
+      api.expertRuns().then(setRuns).catch(() => undefined)
+    }, 4000)
+    return () => window.clearInterval(timer)
+  }, [anyRunning])
+
   useSse((e: any) => {
     if (e?.type !== 'expert') return
     const id = e.run?.id
-    if (id && id === currentRef.current) scheduleRefresh(id)
+    if (id) scheduleRefresh(id)
   })
 
   useEffect(() => {
@@ -142,12 +167,38 @@ export default function ExpertPanel() {
     return () => window.clearInterval(timer)
   }, [current?.id, current?.status])
 
+  // 从上传报告中提取关键词：优先"关键词：xxx"、《xxx》标题、其次文件名
+  const extractKeyword = (text: string, fileName?: string): string => {
+    const m = (text || '').match(/关键词[:：]\s*([^\s，,。；;|]{1,20})/)
+    if (m) return m[1]
+    const book = (text || '').match(/《([^》]{1,20})》/)
+    if (book) return book[1]
+    if (fileName) {
+      const base = fileName.replace(/\.(md|txt)$/i, '').replace(/大佬分析/g, ' ')
+      const tokens = base
+        .split(/[ ()（）\[\]【】_.,，\-]+/)
+        .map((x) => x.trim())
+        .filter(
+          (x) =>
+            x &&
+            !/^\d{4}/.test(x) &&
+            !/^\d+$/.test(x) &&
+            !['天猫', '1688', '拼多多', '报告', '三个平台', '合并'].includes(x),
+        )
+      const hit = tokens.find((x) => /[\u4e00-\u9fa5A-Za-z]/.test(x) && x.length <= 12)
+      if (hit) return hit
+    }
+    return ''
+  }
+
   const addReports = (files: File[]) => {
     files.forEach((file) => {
       const reader = new FileReader()
       reader.onload = () => {
         const content = String(reader.result || '')
         setReports((prev) => [...prev, { name: file.name, content }])
+        const kw = extractKeyword(content, file.name)
+        if (kw) setKeyword((prev) => prev || kw)
       }
       reader.readAsText(file)
     })
@@ -168,7 +219,7 @@ export default function ExpertPanel() {
     setCreating(true)
     try {
       const run = await api.createExpertRun({
-        title: title.trim() || `${keyword.trim() || '品类'} · 大佬分析`,
+        title: title.trim(),
         keyword: keyword.trim(),
         sources,
         max_rounds: maxRounds,
@@ -177,7 +228,7 @@ export default function ExpertPanel() {
       setCurrent(run)
       currentRef.current = run.id
       setRuns((prev) => [run, ...prev.filter((r) => r.id !== run.id)].slice(0, 20))
-      message.success('已开始生成，右侧可看每轮写稿与审查')
+      message.success(`已开始生成「${run.title}」，右侧可看每轮写稿与审查`)
     } catch (e: any) {
       message.error(e.message || '创建失败')
     } finally {
@@ -218,12 +269,15 @@ export default function ExpertPanel() {
         <Card title="新建大佬分析" size="small">
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
             <Input
-              placeholder="报告标题（留空自动生成）"
+              placeholder="报告标题（留空默认：关键词 + 大佬分析）"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              标题留空时自动使用「关键词 · 大佬分析」；同名任务会自动追加 (1)(2) 区分
+            </Typography.Text>
             <Input
-              placeholder="关键词（如：手表）"
+              placeholder="关键词（上传报告自动识别，可修改）"
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
             />
@@ -235,7 +289,14 @@ export default function ExpertPanel() {
               style={{ width: '100%' }}
               placeholder="选择采集批次（可多选、可跨平台）"
               value={selected}
-              onChange={setSelected}
+              onChange={(vals: string[]) => {
+                setSelected(vals)
+                if (!keyword.trim() && vals.length) {
+                  const label = batchOptions.find((o) => o.value === vals[0])?.label || ''
+                  const kw = label.split(' · ')[0]
+                  if (kw) setKeyword(kw)
+                }
+              }}
               options={batchOptions}
             />
             <Space wrap>
@@ -293,7 +354,7 @@ export default function ExpertPanel() {
               renderItem={(r) => (
                 <List.Item
                   style={{ cursor: 'pointer' }}
-                  onClick={() => loadRun(r.id)}
+                  onClick={() => openRun(r.id)}
                   actions={[
                     <Popconfirm
                       key="del"
