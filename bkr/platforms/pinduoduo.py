@@ -28,7 +28,6 @@ from ..browser import (
 from ..config import DATA_DIR
 from ..pace import get_pace
 from ..parse import parse_count, same_search_url
-from ..sort_ui import ensure_sort
 
 SEARCH_URL = "https://mobile.yangkeduo.com/search_result.html?search_key={q}"
 DETAIL_URL = "https://mobile.yangkeduo.com/goods.html?goods_id={iid}"
@@ -52,29 +51,60 @@ class PddDegradedError(BlockedError):
 JS_SSR_LIST = r"""
 () => {
   const strip = (s) => String(s || '').replace(/[\u200b\u200c\u200d]/g, '');
-  const root = window.rawData;
-  if (!root) return {ok: false, why: '无 window.rawData'};
-  const store = root.stores && root.stores.store;
-  const data = store && store.data;
-  if (!data) return {ok: false, why: '无 stores.store.data',
-                     storesKeys: Object.keys(root.stores || {}).slice(0, 20)};
-  const list = data.ssrListData && data.ssrListData.list;
-  if (!Array.isArray(list)) {
-    return {ok: false, why: '无 ssrListData.list',
-            dataKeys: Object.keys(data).slice(0, 30)};
-  }
-  return {
-    ok: true,
-    count: list.length,
-    keys: list.length ? Object.keys(list[0]).slice(0, 40) : [],
-    items: list.map((it) => ({
-      goodsID: strip(it.goodsID ?? it.goods_id ?? it.goodsId ?? ''),
-      goodsName: strip(it.goodsName ?? it.goods_name ?? ''),
-      price: it.price ?? it.min_group_price ?? it.minGroupPrice ?? it.groupPrice ?? null,
-      salesTip: strip(it.salesTip ?? it.sales_tip ?? ''),
-      img: strip(it.hdThumbUrl ?? it.thumbUrl ?? it.image_url ?? it.imgUrl ?? ''),
-    })),
+  const mapItems = (data) => {
+    const d = data && data.stores && data.stores.store && data.stores.store.data;
+    const list = d && d.ssrListData && d.ssrListData.list;
+    if (!Array.isArray(list)) return null;
+    return {
+      count: list.length,
+      keys: list.length ? Object.keys(list[0]).slice(0, 40) : [],
+      items: list.map((it) => ({
+        goodsID: strip(it.goodsID ?? it.goods_id ?? it.goodsId ?? ''),
+        goodsName: strip(it.goodsName ?? it.goods_name ?? ''),
+        price: it.price ?? it.min_group_price ?? it.minGroupPrice ?? it.groupPrice ?? null,
+        salesTip: strip(it.salesTip ?? it.sales_tip ?? ''),
+        img: strip(it.hdThumbUrl ?? it.imgUrl ?? it.thumbUrl ?? it.image_url ?? ''),
+      })),
+    };
   };
+
+  // 1) 内存对象（水合早期可用，之后可能被前端删除）
+  if (window.rawData) {
+    const r = mapItems(window.rawData);
+    if (r) return Object.assign({ok: true, mode: 'window'}, r);
+  }
+
+  // 2) 内联 script 里的 SSR 原文（水合后 window.rawData 被删，但脚本标签仍在 DOM 中）
+  const scripts = Array.from(document.querySelectorAll('script'));
+  for (const s of scripts) {
+    const t = s.textContent || '';
+    const i = t.indexOf('window.rawData=');
+    if (i < 0) continue;
+    const start = t.indexOf('{', i);
+    if (start < 0) continue;
+    let depth = 0, inStr = false, esc = false, raw = '';
+    for (let j = start; j < t.length; j++) {
+      const ch = t[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+      } else if (ch === '"') {
+        inStr = true;
+      } else if (ch === '{') {
+        depth++;
+      } else if (ch === '}') {
+        depth--;
+        if (depth === 0) { raw = t.slice(start, j + 1); break; }
+      }
+    }
+    if (!raw) continue;
+    let data = null;
+    try { data = JSON.parse(raw); } catch (e) { continue; }
+    const r = mapItems(data);
+    if (r) return Object.assign({ok: true, mode: 'script'}, r);
+  }
+  return {ok: false, why: 'window.rawData 不存在，内联脚本中也未找到可用 SSR 数据'};
 }
 """
 
@@ -411,39 +441,34 @@ _WAIT_READY_JS = """
 () => !!(
   (window.rawData && window.rawData.stores && window.rawData.stores.store
    && window.rawData.stores.store.data)
+  || (document.body && document.body.innerText.indexOf('已拼') >= 0)
   || document.querySelectorAll('a[href*="goods.html"]').length > 0
 )
 """
 
 
 def _wait_content(page, timeout_ms: int = 20000) -> str:
-    """等待搜索页水合完成（SSR 数据或商品锚点出现）。
+    """等待搜索页渲染/水合（商品卡片或 SSR 数据出现）。
 
-    拼多多 H5 先返回空壳页面，数据由 JS 稍后注入（实测可达 10 秒级），
-    抢读会误判为 0 解析。返回命中方式：ssr / anchors / none。
-    这只是等待本页脚本执行，不产生额外网络请求。
+    拼多多 H5 先返回空壳页面，数据由 JS 稍后注入；且水合完成后前端可能把
+    window.rawData 从内存删除（SSR 原文仍在 script 标签里，由 JS_SSR_LIST 兜底读取）。
+    返回命中方式：window / render / anchors / none。纯等待，不产生网络请求。
     """
     try:
         page.wait_for_function(_WAIT_READY_JS, timeout=timeout_ms)
     except Exception:
         return "none"
     try:
-        ssr = page.evaluate(
+        if page.evaluate(
             "() => !!(window.rawData && window.rawData.stores && window.rawData.stores.store)"
-        )
+        ):
+            return "window"
+        body = page.evaluate("() => (document.body && document.body.innerText) || ''")
+        if "已拼" in (body or ""):
+            return "render"
     except Exception:
-        ssr = False
-    return "ssr" if ssr else "anchors"
-
-
-def _first_goods_id(page):
-    try:
-        return page.evaluate(
-            "() => { try { return window.rawData.stores.store.data.ssrListData.list[0].goodsID"
-            " ?? null; } catch (e) { return null; } }"
-        )
-    except Exception:
-        return None
+        pass
+    return "anchors"
 
 
 def open_search_page(ctx, task, pageno: int):
@@ -466,16 +491,10 @@ def open_search_page(ctx, task, pageno: int):
         else:
             print(f"  页面已就绪（{mode}）")
         check_pdd_blocked(page)
-        # 排序：点击“销量”页签；比对 SSR 首商品是否变化（用于判断排序是否影响 SSR 数据）
-        id0 = _first_goods_id(page)
-        ensure_sort(page, ("销量", "销量排序"))
-        page.wait_for_timeout(1500)
-        id1 = _first_goods_id(page)
-        if id0 is not None and id1 is not None and id0 != id1:
-            print(f"    [排序] SSR 首商品已变化：{id0} → {id1}")
-        elif id0 is not None:
-            print("    [排序] SSR 首商品未变化（排序可能只影响渲染层，SSR 保持初始顺序）")
-        check_pdd_blocked(page)
+        # 拼多多 H5 的销量排序数据走 XHR 后重渲染，SSR 快照不跟随；
+        # 为了让"同一 URL 只访问一次、少发请求"，这里不点排序页签，
+        # 统一采用默认排序口径（跨批次可比），单品销量以详情页为准。
+        print("    [排序] 拼多多网页版使用默认排序（综合口径，SSR 快照）")
         _scroll_list(page)
         try:
             page._bkr_pdd_scrolled = True
@@ -539,7 +558,7 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
         page.wait_for_timeout(1200)
     if res.get("ok"):
         items = res.get("items") or []
-        print(f"  拼多多 SSR 列表 {len(items)} 条")
+        print(f"  拼多多 SSR 列表 {len(items)} 条（读取方式：{res.get('mode') or 'script'}）")
         if items:
             keys = ", ".join(res.get("keys") or [])
             print(f"    [校准] SSR 字段：{keys[:160]}")
@@ -715,7 +734,7 @@ def probe(keyword: str = "手表", save_html: bool = True) -> None:
                 return
 
             res = page.evaluate(JS_SSR_LIST)
-            print(f"[probe] SSR 可用：{res.get('ok')}，原因：{res.get('why') or '—'}")
+            print(f"[probe] SSR 可用：{res.get('ok')}，读取方式：{res.get('mode') or '—'}，原因：{res.get('why') or '—'}")
             print(f"[probe] SSR 条数（排序前）：{res.get('count')}")
             keys = res.get("keys") or []
             if keys:
@@ -725,12 +744,7 @@ def probe(keyword: str = "手表", save_html: bool = True) -> None:
                 if dkeys:
                     print(f"[probe] 现有 keys：{dkeys}")
 
-            id0 = _first_goods_id(page)
-            ensure_sort(page, ("销量", "销量排序"))
-            page.wait_for_timeout(1500)
-            id1 = _first_goods_id(page)
-            print(f"[probe] 点击“销量”后 SSR 首商品：{id0} → {id1}"
-                  f"（{'已变化' if id0 != id1 else '未变化=SSR 不跟排序'}）")
+            print("[probe] 排序：网页版 SSR 不跟随销量排序，跳过点击（统一默认排序口径）")
 
             _scroll_list(page)
             res2 = page.evaluate(JS_SSR_LIST)
