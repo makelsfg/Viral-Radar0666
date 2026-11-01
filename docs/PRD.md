@@ -78,6 +78,9 @@
 >
 > v0.17.1（2026-11-01，首次实机运行修正）：实机确认拼多多当前会话被固定下发**客户端渲染（CSR）页**（确定性重载与 Agent 重载均无 SSR）。新增 `JS_FIBER_CARDS` + `extract_dom_react()`：从商品图节点的 `__reactFiber$` 沿 fiber 链取列表项 props（goodsID/goodsName/price/salesTip/img），顺序即渲染顺序；collect_pages 在 SSR 失败且 DOM 已渲染商品时先走 fiber 提取，再交给 Agent（agent 工具新增 strategy=dom_react）。Agent 修正：dom_cards 降级为纯信号（ok=false）；提取到可用候选即自动 finish；"无进展"只统计会改变页面的动作（重载/等待/滚动/点击）；prompt 明确 finish 需 extract count>0。pdd-probe 在 SSR 不可用时打印 fiber 提取条数。
 
+>
+> v0.17.2（2026-11-01）：修复大佬分析"修订后返回空报告"。实机 run 显示第 1 轮草稿在 3.1 节后截断（输出预算被打满），第 2 轮修订直接返回空内容并抛 RuntimeError。修复：① 修订轮**不挂工具**（编辑任务单轮完成，消除"工具循环后空输出"路径）；② 空输出自动无工具重试一次；③ writer max_tokens 默认 6000→12000（思考类模型消耗输出预算，6000 不足以写完八节报告）；④ 空内容日志附 finish_reason 便于排查。
+
 ---
 
 ## 1. 背景与目标

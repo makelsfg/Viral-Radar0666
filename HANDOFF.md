@@ -1,6 +1,6 @@
 # 爆款雷达 · 交接说明（HANDOFF）
 
-> 当前版本：**0.17.1**（2026-11-01）
+> 当前版本：**0.17.2**（2026-11-01）
 > 项目目录：`E:\agent_培训代码库\爆款分析\baokuan-radar`
 > 新会话请先读本文件 + 项目记忆 `project_baokuan_radar.md`，再继续。
 
@@ -17,7 +17,7 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - 前端：React + TypeScript + Vite + Ant Design 5（`web/`）
 - 后端：FastAPI（`server/`）+ Playwright/patchright（`bkr/`）+ SQLite（`data/radar.db`）
 - 配置：`config/settings.yaml`（浏览器 channel=msedge，engine=auto；当前自动使用 **patchright**；detail.provider=local；LLM key 已配置）
-- 版本探针：`GET /api/health` → 应显示 `0.17.1`、`engine=patchright`、`channel=msedge`
+- 版本探针：`GET /api/health` → 应显示 `0.17.2`、`engine=patchright`、`channel=msedge`
 - 前端五个页签：采集 / 数据 / 分析 / 大佬分析 / 热词
 
 ## 当前流程
@@ -37,6 +37,11 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 - 每平台仅保留一个工作标签页（列表/详情复用；详情弹窗临时关闭），移除 keep-alive/乱码标签
 - 1688 销量解析兼容"成交 N 笔 / 已售 N 个 / N万+"；详情已售/加购回填快照，数据页可显示并按已售排序
+
+## 最近变更（0.17.2）
+
+- 大佬分析修复：修订轮不挂工具 + 空输出无工具重试一次 + writer max_tokens 6000→12000 + finish_reason 日志；解决"修订后返回空报告"（草稿截断 → 打回 → 修订空输出）
+- 纯后端，无需 npm build
 
 ## 最近变更（0.17.1）
 
@@ -169,5 +174,5 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 ## Git
 
-- 最近提交：`0.17.1`（本文件生成后如未提交，请先 `git add -A && git commit`）
+- 最近提交：`0.17.2`（本文件生成后如未提交，请先 `git add -A && git commit`）
 - 数据/日志/浏览器 profile 均已在 `.gitignore` 中

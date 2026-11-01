@@ -51,7 +51,7 @@ def _llm(role: str):
     if not model:
         raise RuntimeError(f"expert.{role}.model 未配置")
     temperature = float(os.environ.get("BK_EXPERT_TEMPERATURE", "0.3"))
-    max_tokens = int(os.environ.get("BK_EXPERT_MAX_TOKENS", "6000"))
+    max_tokens = int(os.environ.get("BK_EXPERT_MAX_TOKENS", "12000"))
     return ChatOpenAI(
         model=model,
         api_key=api_key,
@@ -76,8 +76,15 @@ def _text(resp) -> str:
     return str(content or "")
 
 
-def _invoke_with_tools(llm, messages, tools, max_steps: int = 4) -> str:
-    """有界工具循环；供应商不支持工具调用时退回普通对话。"""
+def _invoke_with_tools(llm, messages, tools, max_steps: int = 4, use_tools: bool = True) -> str:
+    """有界工具循环；供应商不支持工具调用时退回普通对话。use_tools=False 直接单轮对话。"""
+    if not use_tools:
+        resp = llm.invoke(messages)
+        text = _text(resp)
+        if not text.strip():
+            meta = getattr(resp, "response_metadata", None) or {}
+            print(f"[expert] 模型返回空内容（finish_reason={meta.get('finish_reason')}）")
+        return text
     try:
         from langchain_core.messages import HumanMessage, ToolMessage
 
@@ -107,7 +114,12 @@ def _invoke_with_tools(llm, messages, tools, max_steps: int = 4) -> str:
     messages.append(
         HumanMessage(content="不要再调用工具。请基于已有信息直接输出最终报告全文。")
     )
-    return _text(llm.invoke(messages))
+    resp = llm.invoke(messages)
+    text = _text(resp)
+    if not text.strip():
+        meta = getattr(resp, "response_metadata", None) or {}
+        print(f"[expert] 工具循环后仍为空（finish_reason={meta.get('finish_reason')}）")
+    return text
 
 
 def _sources_label(evidence: dict) -> str:
@@ -141,7 +153,19 @@ def _writer(
             )
         ),
     ]
-    return _invoke_with_tools(llm, messages, tools)
+    # 修订轮不挂工具：多为编辑/补全任务，钉死单轮可显著降低“工具循环后空输出”的概率
+    text = _invoke_with_tools(llm, messages, tools, use_tools=(feedback is None))
+    if (text or "").strip():
+        return text
+    from langchain_core.messages import HumanMessage
+
+    messages.append(HumanMessage(
+        content="上一次输出为空。请直接输出完整报告全文（Markdown，八节），不要调用任何工具。"
+    ))
+    retry = _invoke_with_tools(llm, messages, tools, use_tools=False)
+    if (retry or "").strip():
+        print("[expert] 空输出已通过无工具重试恢复")
+    return retry
 
 
 def _reviewer(state: ExpertState) -> dict:
