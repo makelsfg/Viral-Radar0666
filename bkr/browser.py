@@ -305,6 +305,22 @@ _BLOCK_MARKERS = (
 _LOGIN_MARKERS = ("亲，请登录", "扫码登录", "密码登录")
 
 
+def enable_mouse_as_touch(page) -> None:
+    """把人工在窗口里的鼠标操作转成触摸事件（CDP Emulation.setEmitTouchEventsForMouse）。
+
+    拼多多移动 H5 的滑块验证组件只监听 touchstart/touchmove，桌面鼠标拖不动；
+    开启后人工用鼠标拖动即可像手机一样操作。仅用于人工接管场景，不改变任何自动请求。
+    """
+    try:
+        session = page.context.new_cdp_session(page)
+        session.send(
+            "Emulation.setEmitTouchEventsForMouse",
+            {"enabled": True, "configuration": "mobile"},
+        )
+    except Exception as exc:  # 引擎差异时不阻断主流程
+        print(f"[browser] 触摸事件模拟启用失败（人工拖动可能仍不响应）：{exc}")
+
+
 def check_blocked(page) -> None:
     """检测登录失效 / 滑块验证 / 访问异常，命中即抛异常（由上层暂停批次）。"""
     url = (page.url or "").lower()
@@ -370,6 +386,8 @@ def wait_for_login(ctx, site: str = "taobao", timeout: int = 300, poll: float = 
     }.get(site, "https://www.taobao.com")
     page = get_work_page(ctx)
     page.goto(target, wait_until="domcontentloaded")
+    if site == "pdd":
+        enable_mouse_as_touch(page)
     # 打开登录页时的 cookie 基线：拼多多用于区分“旧 token”和“本次真实登录产生的新 token”
     baseline = {}
     try:

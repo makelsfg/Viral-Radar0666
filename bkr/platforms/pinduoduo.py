@@ -523,6 +523,9 @@ def wait_human_slide(page, timeout: int = 180) -> bool:
         page.bring_to_front()
     except Exception:
         pass
+    from ..browser import enable_mouse_as_touch
+
+    enable_mouse_as_touch(page)  # 移动页滑块只认触摸事件，把人工鼠标操作转成触摸
     print(
         "  [人工接管] 拼多多出现滑块验证：请在浏览器窗口里拖动滑块完成拼图，"
         f"完成后自动继续（最多等待 {timeout // 60} 分钟）"
@@ -864,11 +867,24 @@ def probe(keyword: str = "手表", save_html: bool = True) -> None:
             print(f"[probe] 渲染就绪：{mode}（空壳页会等待最多 20 秒）")
             try:
                 check_pdd_blocked(page)
-            except (LoginError, BlockedError) as e:
-                print(f"[probe] 风控/登录检查未通过：{e}")
+            except LoginError as e:
+                print(f"[probe] 登录检查未通过：{e}")
                 if save_html:
                     print(f"[probe] 现场已保存：{_dump_search_page(page)}")
                 return
+            except BlockedError as e:
+                print(f"[probe] 命中风控/滑块：{e}")
+                if not wait_human_slide(page):
+                    if save_html:
+                        print(f"[probe] 现场已保存：{_dump_search_page(page)}")
+                    return
+                try:
+                    check_pdd_blocked(page)
+                except (LoginError, BlockedError) as e2:
+                    print(f"[probe] 人工处理后仍未通过：{e2}")
+                    if save_html:
+                        print(f"[probe] 现场已保存：{_dump_search_page(page)}")
+                    return
 
             res = page.evaluate(JS_SSR_LIST)
             print(f"[probe] SSR 可用：{res.get('ok')}，读取方式：{res.get('mode') or '—'}，原因：{res.get('why') or '—'}")
