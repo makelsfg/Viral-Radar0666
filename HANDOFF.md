@@ -1,6 +1,6 @@
 # 爆款雷达 · 交接说明（HANDOFF）
 
-> 当前版本：**0.16.0**（2026-11-01）
+> 当前版本：**0.16.1**（2026-11-01）
 > 项目目录：`E:\agent_培训代码库\爆款分析\baokuan-radar`
 > 新会话请先读本文件 + 项目记忆 `project_baokuan_radar.md`，再继续。
 
@@ -17,7 +17,7 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - 前端：React + TypeScript + Vite + Ant Design 5（`web/`）
 - 后端：FastAPI（`server/`）+ Playwright/patchright（`bkr/`）+ SQLite（`data/radar.db`）
 - 配置：`config/settings.yaml`（浏览器 channel=msedge，engine=auto；当前自动使用 **patchright**；detail.provider=local；LLM key 已配置）
-- 版本探针：`GET /api/health` → 应显示 `0.16.0`、`engine=patchright`、`channel=msedge`
+- 版本探针：`GET /api/health` → 应显示 `0.16.1`、`engine=patchright`、`channel=msedge`
 - 前端五个页签：采集 / 数据 / 分析 / 大佬分析 / 热词
 
 ## 当前流程
@@ -37,6 +37,11 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 - 每平台仅保留一个工作标签页（列表/详情复用；详情弹窗临时关闭），移除 keep-alive/乱码标签
 - 1688 销量解析兼容"成交 N 笔 / 已售 N 个 / N万+"；详情已售/加购回填快照，数据页可显示并按已售排序
+
+## 最近变更（0.16.1）
+
+- 修复拼多多首次实机 0 解析：搜索页是**空壳先行、JS 延后注入**（实测 ~10s），原版 2.5s 就抢读。现轮询等待 `window.rawData`/商品锚点（≤20s，纯等待不发请求），SSR 读取 3 次重试；排序后比对 SSR 首商品 goodsID 并打日志（SSR 可能不跟随排序）
+- 实测 SSR `salesTip` 全部是店铺累计口径（本店已拼/全店总售），列表 `sold_lb` 统一留空，单品「已拼」以详情页为准；`parse_pdd_sold`/`_SHOP_SOLD_RE` 已排除店铺口径
 
 ## 最近变更（0.16.0）
 
@@ -122,5 +127,5 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 ## Git
 
-- 最近提交：`0.16.0`（本文件生成后如未提交，请先 `git add -A && git commit`）
+- 最近提交：`0.16.1`（本文件生成后如未提交，请先 `git add -A && git commit`）
 - 数据/日志/浏览器 profile 均已在 `.gitignore` 中

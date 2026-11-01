@@ -95,3 +95,12 @@ def test_pdd_pages_fixed_single_screen():
     # 拼多多为无限滚动：collect_pages 对 pages>1 也只按 1 屏处理（逻辑在 open_search_page）
     assert pdd.MAX_SCROLLS >= 3
     assert 2000 < pdd.PAGE_SETTLE_MS[0] <= pdd.PAGE_SETTLE_MS[1] < 4000
+
+def test_store_level_sales_tip_ignored():
+    # 实测：SSR 卡片的 salesTip 全是店铺累计口径，不得写进单品 sold
+    for tip in ("本店已拼500万+件", "全店总售900万+件", "店铺已拼809件"):
+        c = pdd.normalize_ssr_card(
+            {"goodsID": "9", "goodsName": "手表", "price": 2990, "salesTip": tip}, _Task()
+        )
+        assert c["sold_text"] is None
+        assert c["sold_lb"] is None

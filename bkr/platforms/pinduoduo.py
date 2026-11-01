@@ -27,7 +27,7 @@ from ..browser import (
 )
 from ..config import DATA_DIR
 from ..pace import get_pace
-from ..parse import parse_count, parse_sold_text, same_search_url
+from ..parse import parse_count, same_search_url
 from ..sort_ui import ensure_sort
 
 SEARCH_URL = "https://mobile.yangkeduo.com/search_result.html?search_key={q}"
@@ -174,7 +174,7 @@ JS_DETAIL = r"""
 
 _SOLD_ITEM_RE = re.compile(r"已拼\s*(\d+(?:\.\d+)?)\s*([万wW千kK]?)\+?\s*(?:件|单|笔)?")
 
-_SHOP_SOLD_RE = re.compile(r"(?:本店|店铺)已拼[^\n]{0,14}")
+_SHOP_SOLD_RE = re.compile(r"(?:本店|店铺)已拼[^\n]{0,14}|全店总售[^\n]{0,14}")
 _BAD_TITLE_PARTS = ("¥", "￥", "已拼", "已售", "人拼", "人付款", "包邮", "退货", "补贴", "广告")
 _SKU_JUNK = {
     "选择规格", "选择", "确定", "取消", "立即购买", "单独购买", "发起拼单",
@@ -338,7 +338,9 @@ def normalize_ssr_card(it: dict, task) -> dict | None:
     price = _cents_to_yuan(it.get("price"))
     if not _apply_filters(task, title, title, price):
         return None
-    sold_text, sold_lb = parse_sold_text(_clean(it.get("salesTip")))
+    # 注意：SSR 的 salesTip 常是店铺累计口径（"本店已拼…""全店总售…"），
+    # 必须用排除店铺口径的解析器；单品销量以详情页为准。
+    sold_text, sold_lb = parse_pdd_sold(_clean(it.get("salesTip")))
     return {
         "item_id": iid,
         "title": title,
@@ -405,6 +407,45 @@ def search_url(task, pageno: int) -> str:
     return SEARCH_URL.format(q=quote(task.keywords[0]))
 
 
+_WAIT_READY_JS = """
+() => !!(
+  (window.rawData && window.rawData.stores && window.rawData.stores.store
+   && window.rawData.stores.store.data)
+  || document.querySelectorAll('a[href*="goods.html"]').length > 0
+)
+"""
+
+
+def _wait_content(page, timeout_ms: int = 20000) -> str:
+    """等待搜索页水合完成（SSR 数据或商品锚点出现）。
+
+    拼多多 H5 先返回空壳页面，数据由 JS 稍后注入（实测可达 10 秒级），
+    抢读会误判为 0 解析。返回命中方式：ssr / anchors / none。
+    这只是等待本页脚本执行，不产生额外网络请求。
+    """
+    try:
+        page.wait_for_function(_WAIT_READY_JS, timeout=timeout_ms)
+    except Exception:
+        return "none"
+    try:
+        ssr = page.evaluate(
+            "() => !!(window.rawData && window.rawData.stores && window.rawData.stores.store)"
+        )
+    except Exception:
+        ssr = False
+    return "ssr" if ssr else "anchors"
+
+
+def _first_goods_id(page):
+    try:
+        return page.evaluate(
+            "() => { try { return window.rawData.stores.store.data.ssrListData.list[0].goodsID"
+            " ?? null; } catch (e) { return null; } }"
+        )
+    except Exception:
+        return None
+
+
 def open_search_page(ctx, task, pageno: int):
     """拼多多 H5 为无限滚动：固定单屏采集，第 N 页参数被忽略并告警。"""
     page = get_work_page(ctx)
@@ -419,7 +460,21 @@ def open_search_page(ctx, task, pageno: int):
     if not same_search_url(page.url or "", url):
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(random.randint(*PAGE_SETTLE_MS))
+        mode = _wait_content(page)
+        if mode == "none":
+            print("  [警告] 页面 20 秒内未完成渲染（rawData/商品链接均未出现），继续尝试兜底解析")
+        else:
+            print(f"  页面已就绪（{mode}）")
+        check_pdd_blocked(page)
+        # 排序：点击“销量”页签；比对 SSR 首商品是否变化（用于判断排序是否影响 SSR 数据）
+        id0 = _first_goods_id(page)
         ensure_sort(page, ("销量", "销量排序"))
+        page.wait_for_timeout(1500)
+        id1 = _first_goods_id(page)
+        if id0 is not None and id1 is not None and id0 != id1:
+            print(f"    [排序] SSR 首商品已变化：{id0} → {id1}")
+        elif id0 is not None:
+            print("    [排序] SSR 首商品未变化（排序可能只影响渲染层，SSR 保持初始顺序）")
         check_pdd_blocked(page)
         _scroll_list(page)
         try:
@@ -473,13 +528,30 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
     page = open_search_page(ctx, task, 1)
 
     cards: list[dict] = []
-    res = page.evaluate(JS_SSR_LIST)
+    res: dict = {}
+    for _attempt in range(3):
+        try:
+            res = page.evaluate(JS_SSR_LIST)
+        except Exception as exc:
+            res = {"ok": False, "why": f"{type(exc).__name__}: {exc}"}
+        if res.get("ok") and (res.get("items") or []):
+            break
+        page.wait_for_timeout(1200)
     if res.get("ok"):
         items = res.get("items") or []
         print(f"  拼多多 SSR 列表 {len(items)} 条")
         if items:
             keys = ", ".join(res.get("keys") or [])
             print(f"    [校准] SSR 字段：{keys[:160]}")
+            storeish = sum(
+                1 for it in items
+                if any(k in str(it.get("salesTip") or "") for k in ("本店已拼", "店铺已拼", "全店总售"))
+            )
+            if storeish:
+                print(
+                    f"    [口径] {storeish}/{len(items)} 条卡片销量是店铺累计口径，已忽略"
+                    "（单品销量以详情页为准）"
+                )
         for it in items:
             c = normalize_ssr_card(it, task)
             if c:
@@ -632,6 +704,8 @@ def probe(keyword: str = "手表", save_html: bool = True) -> None:
             print(f"[probe] 打开：{url}")
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(random.randint(*PAGE_SETTLE_MS))
+            mode = _wait_content(page)
+            print(f"[probe] 渲染就绪：{mode}（空壳页会等待最多 20 秒）")
             try:
                 check_pdd_blocked(page)
             except (LoginError, BlockedError) as e:
@@ -641,9 +715,8 @@ def probe(keyword: str = "手表", save_html: bool = True) -> None:
                 return
 
             res = page.evaluate(JS_SSR_LIST)
-            print(f"[probe] window.rawData 存在：{bool(page.evaluate('() => !!window.rawData'))}")
             print(f"[probe] SSR 可用：{res.get('ok')}，原因：{res.get('why') or '—'}")
-            print(f"[probe] SSR 条数（滚动前）：{res.get('count')}")
+            print(f"[probe] SSR 条数（排序前）：{res.get('count')}")
             keys = res.get("keys") or []
             if keys:
                 print(f"[probe] 首个条目的字段 keys：{keys}")
@@ -652,9 +725,16 @@ def probe(keyword: str = "手表", save_html: bool = True) -> None:
                 if dkeys:
                     print(f"[probe] 现有 keys：{dkeys}")
 
+            id0 = _first_goods_id(page)
+            ensure_sort(page, ("销量", "销量排序"))
+            page.wait_for_timeout(1500)
+            id1 = _first_goods_id(page)
+            print(f"[probe] 点击“销量”后 SSR 首商品：{id0} → {id1}"
+                  f"（{'已变化' if id0 != id1 else '未变化=SSR 不跟排序'}）")
+
             _scroll_list(page)
             res2 = page.evaluate(JS_SSR_LIST)
-            print(f"[probe] SSR 条数（滚动后）：{res2.get('count')}（若不变，说明滚动不更新 SSR 数据）")
+            print(f"[probe] SSR 条数（滚动后）：{res2.get('count')}（若不变，说明滚动不追加 SSR 数据）")
 
             anchors = page.evaluate(JS_CARDS)
             print(f"[probe] DOM 锚点卡片数：{len(anchors)}")
