@@ -1,6 +1,6 @@
 # 爆款雷达 · 交接说明（HANDOFF）
 
-> 当前版本：**0.16.2**（2026-11-01）
+> 当前版本：**0.16.3**（2026-11-01）
 > 项目目录：`E:\agent_培训代码库\爆款分析\baokuan-radar`
 > 新会话请先读本文件 + 项目记忆 `project_baokuan_radar.md`，再继续。
 
@@ -17,7 +17,7 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - 前端：React + TypeScript + Vite + Ant Design 5（`web/`）
 - 后端：FastAPI（`server/`）+ Playwright/patchright（`bkr/`）+ SQLite（`data/radar.db`）
 - 配置：`config/settings.yaml`（浏览器 channel=msedge，engine=auto；当前自动使用 **patchright**；detail.provider=local；LLM key 已配置）
-- 版本探针：`GET /api/health` → 应显示 `0.16.2`、`engine=patchright`、`channel=msedge`
+- 版本探针：`GET /api/health` → 应显示 `0.16.3`、`engine=patchright`、`channel=msedge`
 - 前端五个页签：采集 / 数据 / 分析 / 大佬分析 / 热词
 
 ## 当前流程
@@ -37,6 +37,12 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 - 每平台仅保留一个工作标签页（列表/详情复用；详情弹窗临时关闭），移除 keep-alive/乱码标签
 - 1688 销量解析兼容"成交 N 笔 / 已售 N 个 / N万+"；详情已售/加购回填快照，数据页可显示并按已售排序
+
+## 最近变更（0.16.3）
+
+- 修复拼多多登录误判：匿名访问会下发 `pdd_user_id/pdd_user_uin`，原“任一 cookie=已登录”导致登录窗口秒关、旧 state 里的过期 token 让列表能跑但点详情被踢回登录页。现在**只认 `PDDAccessToken`**，且登录等待采用基线对比：必须相对打开登录页时新出现/已刷新才算真实登录；CLI `login --site pdd` 同步该判定
+- 拼多多登录提示改为手机号验证码并指向右上角「登录拼多多」；登录/待处理提示按平台区分（不再显示 tmall 的 cookie2+unb）
+- 注意：本版有前端改动，需 `npm run build` 后重启
 
 ## 最近变更（0.16.2）
 
@@ -132,5 +138,5 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 ## Git
 
-- 最近提交：`0.16.2`（本文件生成后如未提交，请先 `git add -A && git commit`）
+- 最近提交：`0.16.3`（本文件生成后如未提交，请先 `git add -A && git commit`）
 - 数据/日志/浏览器 profile 均已在 `.gitignore` 中

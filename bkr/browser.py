@@ -42,7 +42,7 @@ class EmptyResultError(RuntimeError):
 
 
 LOGIN_COOKIE_NAMES = {"cookie2", "unb"}
-PDD_COOKIE_NAMES = {"pdd_user_id", "pdd_user_uin", "PDDAccessToken", "pdd_login_token"}
+PDD_LOGIN_COOKIE = "PDDAccessToken"
 
 
 def has_login_cookies(names) -> bool:
@@ -51,8 +51,12 @@ def has_login_cookies(names) -> bool:
 
 
 def has_pdd_login_cookies(names) -> bool:
-    """拼多多 H5 登录态：出现用户 id / token 类 cookie 即视为已登录。"""
-    return bool(PDD_COOKIE_NAMES & set(names))
+    """拼多多 H5 登录态：只认 PDDAccessToken。
+
+    注意：拼多多匿名访问也会下发 pdd_user_id / pdd_user_uin 等 id cookie，
+    之前“任一 cookie 即已登录”的判定会把未登录误判为已登录（登录窗口因此秒关）。
+    """
+    return PDD_LOGIN_COOKIE in set(names)
 
 
 def engine_name() -> str:
@@ -366,8 +370,15 @@ def wait_for_login(ctx, site: str = "taobao", timeout: int = 300, poll: float = 
     }.get(site, "https://www.taobao.com")
     page = get_work_page(ctx)
     page.goto(target, wait_until="domcontentloaded")
+    # 打开登录页时的 cookie 基线：拼多多用于区分“旧 token”和“本次真实登录产生的新 token”
+    baseline = {}
+    try:
+        baseline = {c.get("name"): c.get("value") or "" for c in ctx.cookies()}
+    except Exception:
+        pass
 
     hits = 0
+    names = set(baseline)
     deadline = time.time() + timeout
     while time.time() < deadline:
         if cancel_event is not None and cancel_event.is_set():
@@ -375,9 +386,10 @@ def wait_for_login(ctx, site: str = "taobao", timeout: int = 300, poll: float = 
         if page.is_closed():
             return False, "closed"
         try:
-            names = {c.get("name") for c in ctx.cookies()}
+            cookie_map = {c.get("name"): c.get("value") or "" for c in ctx.cookies()}
         except Exception:
             return False, "closed"
+        names = set(cookie_map)
         url = (page.url or "").lower()
         on_login = any(
             k in url for k in (
@@ -389,10 +401,13 @@ def wait_for_login(ctx, site: str = "taobao", timeout: int = 300, poll: float = 
             cookie_ok = bool({"__cn_logon__", "_cn_"} & names)
             ok_now = cookie_ok and not on_login
         elif site == "pdd":
-            # 拼多多 H5 登录成功后可能仍停留在 login.html（SPA 不换 URL），
-            # 但 PDDAccessToken / pdd_user_id 已落盘，这已经是可靠登录态。
-            cookie_ok = has_pdd_login_cookies(names)
-            ok_now = cookie_ok
+            # 拼多多 H5 登录成功后可能仍停留在 login.html（SPA 不换 URL）；
+            # 且匿名访问会下发 pdd_user_id 等 id cookie，旧 profile/state 里也可能残留过期 token。
+            # 因此只认 PDDAccessToken，且必须与打开登录页时的基线不同（新出现或已刷新），
+            # 否则登录窗口会被旧 token 秒判成功、不给用户输入验证码的机会。
+            token_now = cookie_map.get(PDD_LOGIN_COOKIE) or ""
+            token_base = baseline.get(PDD_LOGIN_COOKIE) or ""
+            ok_now = bool(token_now) and token_now != token_base
         else:
             cookie_ok = has_login_cookies(names)
             ok_now = cookie_ok and not on_login
@@ -435,17 +450,30 @@ def login(site: str = "taobao", profile: str | None = None) -> None:
         page = ctx.new_page()
         try:
             page.goto(target, wait_until="domcontentloaded")
-            print(f"请在弹出的浏览器窗口里完成 {site} 登录（扫码即可）。")
+            login_base = {}
+            try:
+                login_base = {c.get("name"): c.get("value") or "" for c in ctx.cookies()}
+            except Exception:
+                pass
+            print(f"请在弹出的浏览器窗口里完成 {site} 登录（1688 扫码；拼多多为手机号验证码）。")
             print("[注意] 登录完成后【不要关闭浏览器窗口】，直接回到终端按回车。")
             input()
 
             logged_in = False
             try:
-                cookie_names = {c.get("name") for c in ctx.cookies()}
+                cookie_map = {c.get("name"): c.get("value") or "" for c in ctx.cookies()}
+                cookie_names = set(cookie_map)
                 if site == "1688":
                     logged_in = bool({"__cn_logon__", "cookie2", "_cn_"} & cookie_names)
                 elif site == "pdd":
-                    logged_in = has_pdd_login_cookies(cookie_names)
+                    token_now = cookie_map.get(PDD_LOGIN_COOKIE) or ""
+                    token_base = login_base.get(PDD_LOGIN_COOKIE) or ""
+                    logged_in = bool(token_now) and token_now != token_base
+                    if not logged_in:
+                        print(
+                            "未检测到新的 PDDAccessToken：可能还没有完成手机号验证码登录，"
+                            "或登录窗口停在未完成的页面。请重新执行 bkr login --site pdd。"
+                        )
                 else:
                     logged_in = has_login_cookies(cookie_names)
                 print(f"检测到浏览器 cookie {len(cookie_names)} 个")

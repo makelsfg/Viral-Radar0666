@@ -60,6 +60,9 @@
 >
 > v0.16.2（2026-11-01，第二次实机失败修复）：定位到拼多多前端**水合后会把 `window.rawData` 从内存删除**（页面截图与 HTML 均证明搜索页已完整渲染），但 SSR 原文仍保留在内联 `<script>` 标签中。`JS_SSR_LIST` 改为双通道：优先读 `window.rawData`，不存在时从 script 标签文本中做括号配平提取 JSON 再解析（已用真实页面离线验证：20 条、字段 goodsID/goodsName/price(分)/salesTip/imgUrl 全部正确）。等待条件加入"页面已渲染出含已拼的商品卡"；另决定**不点击销量排序页签**（H5 排序走 XHR，SSR 快照不跟随，点击只多一次请求），拼多多统一默认排序口径并写日志。
 
+>
+> v0.16.3（2026-11-01，登录误判修复）：拼多多**匿名访问也会下发 pdd_user_id / pdd_user_uin 等 id cookie**，原“任一 cookie 即已登录”导致①登录窗口被秒判成功自动关闭；②旧 state-pdd.json 的过期 PDDAccessToken 被注入后列表可采但点详情被踢回登录页。修复：登录判定只认 `PDDAccessToken`；登录等待引入**基线对比**——只有相对打开登录页时新出现/已刷新的 PDDAccessToken 才算真实登录（旧 token 不再误判），CLI login 同步；拼多多登录提示文案改为“手机号验证码”并指向右上角「登录拼多多」。
+
 ---
 
 ## 1. 背景与目标

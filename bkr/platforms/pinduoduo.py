@@ -421,8 +421,8 @@ def check_pdd_blocked(page) -> None:
         head = ""
     if "login.html" in url or any(m in head for m in _LOGIN_MARKERS):
         raise LoginError(
-            "拼多多未登录或登录态失效：请先执行 python -m bkr.cli login --site pdd"
-            "（手机号验证码），登录成功后再 --resume 续采"
+            "拼多多未登录或登录态失效：请点右上角「登录拼多多」完成手机号验证码登录"
+            "（或终端 bkr login --site pdd），登录成功后再点「继续采集」"
         )
     if "captcha" in url or any(m in head for m in _SLIDER_MARKERS):
         raise BlockedError("拼多多出现滑块验证，请人工在浏览器完成验证后执行 --resume 续采")

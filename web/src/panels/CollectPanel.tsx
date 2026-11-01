@@ -529,7 +529,11 @@ export default function CollectPanel() {
               message={needLogin ? '需要重新登录' : '需要人工处理'}
               description={
                 needLogin
-                  ? '当前登录态不完整（需 cookie2 + unb）。点「打开登录」完成扫码，再点「继续采集」。'
+                  ? job?.task_platform === 'pdd'
+                    ? '拼多多未登录：点「打开登录」，在弹窗里完成手机号验证码登录（登录成功后窗口会自动关闭），再点「继续采集」。'
+                    : job?.task_platform === '1688'
+                      ? '当前登录态不完整（需 1688 登录标记）。点「打开登录」完成扫码，再点「继续采集」。'
+                      : '当前登录态不完整（需 cookie2 + unb）。点「打开登录」完成扫码，再点「继续采集」。'
                   : '到弹出的浏览器里完成滑块验证（或重新登录），然后点「继续采集」。'
               }
               action={
