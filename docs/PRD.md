@@ -75,6 +75,9 @@
 >
 > v0.17.0（2026-11-01）：**采集监督 Agent（P1）**。确定性路径失败后由带白名单工具的 loop 接管恢复：观察器把页面分类为 slider/login_wall/risk_page/degraded/ssr_ready/client_rendered/empty_results/shell/unknown；9 个工具（extract/settle/scroll/reload/wait_human/click_sort/check_login/save_evidence/finish/escalate）内置预算（滑块≤2、登录≤1、每 URL 重载≤1、steps≤8、总时长≤600s）；LLM 决策失败 2 次即本批切规则引擎；全部步骤写 `agent_run/agent_step`，恢复成功批次打 `batch_run.agent_recovered`。CLI：`python -m bkr.cli agent-collect --keyword 手表 [--no-llm]`；配置 `settings.agent`。红线不变：不调接口、不绕验证、不编造数据。
 
+>
+> v0.17.1（2026-11-01，首次实机运行修正）：实机确认拼多多当前会话被固定下发**客户端渲染（CSR）页**（确定性重载与 Agent 重载均无 SSR）。新增 `JS_FIBER_CARDS` + `extract_dom_react()`：从商品图节点的 `__reactFiber$` 沿 fiber 链取列表项 props（goodsID/goodsName/price/salesTip/img），顺序即渲染顺序；collect_pages 在 SSR 失败且 DOM 已渲染商品时先走 fiber 提取，再交给 Agent（agent 工具新增 strategy=dom_react）。Agent 修正：dom_cards 降级为纯信号（ok=false）；提取到可用候选即自动 finish；"无进展"只统计会改变页面的动作（重载/等待/滚动/点击）；prompt 明确 finish 需 extract count>0。pdd-probe 在 SSR 不可用时打印 fiber 提取条数。
+
 ---
 
 ## 1. 背景与目标

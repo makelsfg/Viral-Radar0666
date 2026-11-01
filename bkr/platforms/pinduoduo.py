@@ -136,6 +136,77 @@ JS_CARDS = r"""
 }
 """
 
+# CSR（客户端渲染）模式：卡片货号不在 DOM/SSR 里，而在 React fiber 的 props 中。
+# 从每张商品图所在的 DOM 节点出发，沿 __reactFiber$ 向上找携带列表项 object 的 props。
+JS_FIBER_CARDS = r"""
+() => {
+  const strip = (s) => String(s || '').replace(/[\u200b\u200c\u200d]/g, '');
+  const isImg = (im) => {
+    const s = im.currentSrc || im.src || '';
+    return /pddpic|yangkeduo|pinduoduo/.test(s) && !/logo|icon|avatar|扫码/i.test(s);
+  };
+  const findItem = (el) => {
+    let node = el;
+    for (let i = 0; i < 8 && node; i++) {
+      const fk = Object.keys(node).find(
+        (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')
+      );
+      if (fk) {
+        let fiber = node[fk];
+        for (let j = 0; j < 14 && fiber; j++) {
+          const p = fiber.memoizedProps || {};
+          const cand = p.item || p.data || p.goods || p.payload;
+          if (cand && typeof cand === 'object') {
+            const id = cand.goodsID ?? cand.goods_id ?? cand.goodsId ?? '';
+            if (id) return cand;
+          }
+          fiber = fiber.return;
+        }
+      }
+      node = node.parentElement;
+    }
+    return null;
+  };
+  const out = [], seen = new Set();
+  document.querySelectorAll('img').forEach((im) => {
+    if (!isImg(im)) return;
+    const it = findItem(im);
+    if (!it) return;
+    const id = String(it.goodsID ?? it.goods_id ?? it.goodsId ?? '');
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    out.push({
+      goodsID: id,
+      goodsName: strip(it.goodsName ?? it.goods_name ?? ''),
+      price: it.price ?? it.min_group_price ?? it.minGroupPrice ?? it.groupPrice ?? null,
+      salesTip: strip(it.salesTip ?? it.sales_tip ?? ''),
+      img: im.currentSrc || im.src || '',
+    });
+  });
+  return out;
+}
+"""
+
+
+def extract_dom_react(page) -> list[dict]:
+    """CSR 页面从 React props 恢复商品列表（顺序即页面渲染顺序）。"""
+    try:
+        items = page.evaluate(JS_FIBER_CARDS) or []
+    except Exception:
+        return []
+    return [
+        {
+            "goodsID": str(it.get("goodsID") or ""),
+            "goodsName": it.get("goodsName") or "",
+            "price": it.get("price"),
+            "salesTip": it.get("salesTip") or "",
+            "img": it.get("img") or "",
+        }
+        for it in items
+        if it.get("goodsID")
+    ]
+
+
 # ———————————————————— 详情页：DOM + 文本 ————————————————————
 
 JS_DETAIL = r"""
@@ -764,6 +835,24 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
             print(f"  [兜底] SSR 不可用，使用 goods.html 锚点解析（{len(cards)} 个）；请把此现象反馈校准 SSR 路径")
 
     if not cards:
+        # CSR 页面兜底：商品已渲染但无 SSR —— 从 React fiber 恢复列表
+        try:
+            from ..agent.observe import read_signals
+
+            sig = read_signals(page)
+            if int(sig.get("productTexts") or 0) >= 3:
+                items = extract_dom_react(page)
+                for it in items:
+                    c = normalize_ssr_card(it, task)
+                    if c:
+                        c["page_no"] = 1
+                        cards.append(c)
+                if cards:
+                    print(f"  [CSR] 从 React props 恢复候选 {len(cards)} 个")
+        except Exception as exc:
+            print(f"  [CSR][警告] fiber 提取失败：{type(exc).__name__}: {exc}")
+
+    if not cards:
         # 确定性路径失败 → 采集监督 Agent 接管（规则引擎打底，LLM 可选）
         try:
             from ..agent.runner import agent_enabled, supervised_recover
@@ -940,6 +1029,10 @@ def probe(keyword: str = "手表", save_html: bool = True) -> None:
 
                 if _recover_ssr_page(page, _T()):
                     res = _read_ssr(page)
+            if not (res.get("ok") and (res.get("items") or [])):
+                fiber = extract_dom_react(page)
+                sample = [it.get("goodsName") for it in fiber[:2]]
+                print(f"[probe] SSR 不可用，React props 提取：{len(fiber)} 条；样例：{sample}")
             print(f"[probe] SSR 可用：{res.get('ok')}，读取方式：{res.get('mode') or '—'}，原因：{res.get('why') or '—'}")
             print(f"[probe] SSR 条数（排序前）：{res.get('count')}")
             keys = res.get("keys") or []

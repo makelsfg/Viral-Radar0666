@@ -63,6 +63,16 @@ class ToolBox:
                 "count": len(items),
                 "sample": [it.get("goodsName") for it in items[:2]],
             }
+        if strategy == "dom_react":
+            items = pdd.extract_dom_react(self.page)
+            self.last_items = items
+            return {
+                "ok": bool(items),
+                "strategy": strategy,
+                "count": len(items),
+                "usable": bool(items),
+                "sample": [it.get("goodsName") for it in items[:2]],
+            }
         if strategy == "anchors":
             raws = self.page.evaluate(pdd.JS_CARDS) or []
             return {"ok": True, "strategy": strategy, "count": len(raws)}
@@ -71,11 +81,11 @@ class ToolBox:
 
             sig = read_signals(self.page)
             return {
-                "ok": True,
+                "ok": False,
                 "strategy": strategy,
                 "count": int(sig.get("productTexts") or 0),
                 "usable": False,
-                "note": "DOM 卡片无稳定货号，仅作为信号",
+                "note": "仅信号：DOM 卡片无货号，不能作为候选来源；请用 dom_react",
             }
         return {"ok": False, "error": f"未知策略：{strategy}"}
 

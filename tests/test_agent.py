@@ -39,8 +39,15 @@ def test_rule_table():
     assert policy.rule_decide({"state": "ssr_ready"}, full)["tool"] == "finish"
     assert policy.rule_decide({"state": "client_rendered"}, full)["tool"] == "reload_search"
     no_reload = dict(full, reloads_left=0)
-    assert policy.rule_decide({"state": "client_rendered"}, no_reload)["tool"] == "save_evidence"
-    saved = {"state": "client_rendered", "history": [{"tool": "save_evidence"}]}
+    # 重载用尽 → 先尝试 React props 提取，再存证，最后 escalate
+    after_reload = {"state": "client_rendered", "history": [{"tool": "reload_search"}]}
+    d = policy.rule_decide(after_reload, no_reload)
+    assert d["tool"] == "extract_candidates" and d["args"]["strategy"] == "dom_react"
+    after_extract = {"state": "client_rendered",
+                     "history": [{"tool": "reload_search"}, {"tool": "extract_candidates"}]}
+    assert policy.rule_decide(after_extract, no_reload)["tool"] == "save_evidence"
+    saved = {"state": "client_rendered",
+             "history": [{"tool": "extract_candidates"}, {"tool": "save_evidence"}]}
     assert policy.rule_decide(saved, no_reload)["tool"] == "escalate"
     assert policy.rule_decide({"state": "slider"}, full)["tool"] == "wait_human"
     assert policy.rule_decide({"state": "slider"}, dict(full, slider_left=0))["tool"] == "escalate"
@@ -90,3 +97,10 @@ def test_store_roundtrip():
     finally:
         store.db = orig
         os.remove(path)
+
+def test_fiber_extractor_markers():
+    from bkr.platforms import pinduoduo as pdd
+
+    assert "__reactFiber$" in pdd.JS_FIBER_CARDS
+    assert "goodsID" in pdd.JS_FIBER_CARDS
+    assert callable(pdd.extract_dom_react)

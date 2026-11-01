@@ -110,15 +110,24 @@ def supervised_recover(page, task, reason: str = "", use_llm: bool | None = None
         history.append({"tool": tool, "result": _brief(result)})
         steps = idx
 
-        if sig == last_sig:
-            same_sig += 1
-        else:
-            same_sig = 1
-        last_sig = sig
-        if same_sig >= 3:
-            status = "escalated"
-            summary = "连续三步状态无变化，停止（避免空转）"
+        # 拿到可用候选即成功，无需再绕一圈 finish
+        if tool == "extract_candidates" and toolbox.last_items:
+            items = toolbox.last_items
+            status = "success"
+            summary = f"提取到 {len(items)} 条候选（strategy={args.get('strategy')}）"
             break
+
+        # 无进展只对“会改变页面”的动作计数（提取/存证是只读的）
+        if tool in ("reload_search", "settle", "scroll_more", "wait_human", "click_sort"):
+            if sig == last_sig:
+                same_sig += 1
+            else:
+                same_sig = 1
+            last_sig = sig
+            if same_sig >= 3:
+                status = "escalated"
+                summary = "连续三步页面无变化，停止（避免空转）"
+                break
 
     store.finish_run(run_id, status, steps, llm_calls, summary or "未完成")
     if status == "success":

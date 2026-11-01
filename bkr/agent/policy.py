@@ -11,7 +11,7 @@ TOOL_NAMES = (
     "wait_human", "click_sort", "check_login", "save_evidence", "finish", "escalate",
 )
 
-TOOLS_DESC = """- extract_candidates(strategy: ssr_script|ssr_window|anchors|dom_cards) 提取候选
+TOOLS_DESC = """- extract_candidates(strategy: ssr_script|ssr_window|dom_react|anchors|dom_cards) 提取候选；dom_react=从 React props 恢复 CSR 页面商品；dom_cards 仅信号（无货号，不可作为数据源）
 - settle(secs: 1-5) 原地等待渲染（不发请求）
 - scroll_more(n: 1-3) 向下滚动触发加载
 - reload_search(reason) 重新加载当前搜索页（每 URL 限次）
@@ -55,8 +55,10 @@ def rule_decide(state: dict, budget: dict) -> dict:
             message="拼多多返回风控/降级页面：请人工确认页面状态，冷却一段时间后再采集。",
         )
     if st == "client_rendered":
-        if budget.get("reloads_left", 0) > 0:
+        if budget.get("reloads_left", 0) > 0 and "reload_search" not in hist:
             return _pick("reload_search", st, reason="客户端渲染页，重载取 SSR")
+        if "extract_candidates" not in hist:
+            return _pick("extract_candidates", st, strategy="dom_react")
         if "save_evidence" not in hist:
             return _pick("save_evidence", st, tag="client_rendered")
         return _pick(
