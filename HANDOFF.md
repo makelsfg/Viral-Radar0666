@@ -1,6 +1,6 @@
 # 爆款雷达 · 交接说明（HANDOFF）
 
-> 当前版本：**0.16.3**（2026-11-01）
+> 当前版本：**0.16.4**（2026-11-01）
 > 项目目录：`E:\agent_培训代码库\爆款分析\baokuan-radar`
 > 新会话请先读本文件 + 项目记忆 `project_baokuan_radar.md`，再继续。
 
@@ -17,7 +17,7 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - 前端：React + TypeScript + Vite + Ant Design 5（`web/`）
 - 后端：FastAPI（`server/`）+ Playwright/patchright（`bkr/`）+ SQLite（`data/radar.db`）
 - 配置：`config/settings.yaml`（浏览器 channel=msedge，engine=auto；当前自动使用 **patchright**；detail.provider=local；LLM key 已配置）
-- 版本探针：`GET /api/health` → 应显示 `0.16.3`、`engine=patchright`、`channel=msedge`
+- 版本探针：`GET /api/health` → 应显示 `0.16.4`、`engine=patchright`、`channel=msedge`
 - 前端五个页签：采集 / 数据 / 分析 / 大佬分析 / 热词
 
 ## 当前流程
@@ -37,6 +37,12 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 - 每平台仅保留一个工作标签页（列表/详情复用；详情弹窗临时关闭），移除 keep-alive/乱码标签
 - 1688 销量解析兼容"成交 N 笔 / 已售 N 个 / N万+"；详情已售/加购回填快照，数据页可显示并按已售排序
+
+## 最近变更（0.16.4）
+
+- 拼多多滑块人工接管：检测到滑块（"拼多多安全验证/拖动滑块完成拼图"）时窗口前置并等待人工拖动，最多 3 分钟，通过后自动继续；超时才暂停批次
+- 拼多多销量排序：搜索页点击“销量”（ensure_sort）；URL 变排序页则重开一次取销量序 SSR，否则按 DOM 图片渲染顺序重排 SSR 候选（匹配 ≥40% 才采用），不行保持综合序并警告；probe 输出排序测量
+- 本版有前端改动（RunModal 滑块提示），需 npm run build
 
 ## 最近变更（0.16.3）
 
@@ -138,5 +144,5 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 ## Git
 
-- 最近提交：`0.16.3`（本文件生成后如未提交，请先 `git add -A && git commit`）
+- 最近提交：`0.16.4`（本文件生成后如未提交，请先 `git add -A && git commit`）
 - 数据/日志/浏览器 profile 均已在 `.gitignore` 中

@@ -104,3 +104,31 @@ def test_store_level_sales_tip_ignored():
         )
         assert c["sold_text"] is None
         assert c["sold_lb"] is None
+
+
+def test_slider_markers_cover_real_popup():
+    assert "拼多多安全验证" in pdd._SLIDER_MARKERS
+    assert "完成上方拼图" in pdd._SLIDER_MARKERS
+
+
+def test_img_key_and_reorder():
+    items = [
+        {"goodsID": "A", "img": "https://img.pddpic.com/mms/1/aaa.jpeg.a.jpeg"},
+        {"goodsID": "B", "img": "https://img.pddpic.com/mms/2/bbb.jpeg"},
+        {"goodsID": "C", "img": "https://img.pddpic.com/mms/3/ccc.png"},
+    ]
+    dom = [
+        "https://img.pddpic.com/mms/3/ccc.png?imageView2/2/w/200",
+        "https://img.pddpic.com/mms/1/aaa.jpeg.a.jpeg",
+        "https://img.pddpic.com/mms/2/bbb.jpeg",
+    ]
+    out, matched = pdd._reorder_items_by_images(items, dom)
+    assert matched == 3
+    assert [x["goodsID"] for x in out] == ["C", "A", "B"]
+
+
+def test_reorder_low_match_keeps_original():
+    items = [{"goodsID": str(i), "img": f"https://x/{i}.jpeg"} for i in range(5)]
+    out, matched = pdd._reorder_items_by_images(items, ["https://x/0.jpeg"])
+    assert matched == 1
+    assert out == items

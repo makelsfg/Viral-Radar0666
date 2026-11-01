@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import random
 import re
+import time
 from datetime import datetime
 from urllib.parse import quote
 
@@ -28,6 +29,7 @@ from ..browser import (
 from ..config import DATA_DIR
 from ..pace import get_pace
 from ..parse import parse_count, same_search_url
+from ..sort_ui import ensure_sort
 
 SEARCH_URL = "https://mobile.yangkeduo.com/search_result.html?search_key={q}"
 DETAIL_URL = "https://mobile.yangkeduo.com/goods.html?goods_id={iid}"
@@ -221,7 +223,10 @@ _SERVICE_KEYS = (
 _DEGRADED_MARKERS = ("前往app查看价格", "打开app查看", "app内打开", "前往app查看",)
 
 # 滑块 / 登录 / 访问异常的判定文案（仅用于拼多多，不影响天猫/1688）
-_SLIDER_MARKERS = ("请拖动下方滑块", "拖动滑块完成验证", "滑动验证", "完成安全验证")
+_SLIDER_MARKERS = (
+    "请拖动下方滑块", "拖动滑块完成验证", "滑动验证", "完成安全验证",
+    "拼多多安全验证", "拖动滑块", "完成上方拼图",
+)
 _LOGIN_MARKERS = ("手机号登录", "扫码登录", "验证码登录", "请登录后查看")
 _ACCESS_MARKERS = ("访问异常", "系统繁忙", "访问受限")
 
@@ -430,6 +435,134 @@ def check_pdd_blocked(page) -> None:
         raise BlockedError("拼多多返回访问异常/系统繁忙，请人工确认恢复并冷却一段时间后再续采")
 
 
+JS_DOM_IMAGES = """
+() => {
+  const out = [];
+  document.querySelectorAll('img').forEach((im) => {
+    const s = im.currentSrc || im.src || im.getAttribute('data-src') || '';
+    if (/pddpic|yangkeduo|pinduoduo/.test(s) && !/logo|icon|avatar|扫码/i.test(s)) out.push(s);
+  });
+  return out;
+}
+"""
+
+
+def _img_key(url: str) -> str:
+    """图片 URL → 稳定键（去掉协议参数与尺寸后缀，取文件名首段）。"""
+    u = str(url or "").split("?")[0]
+    tail = u.rsplit("/", 1)[-1]
+    return tail.split(".")[0]
+
+
+def _reorder_items_by_images(items: list[dict], dom_urls: list[str]):
+    """按页面渲染的图片顺序重排 SSR 条目。返回 (items, 匹配数)；匹配太少则原样返回。"""
+    if not items or not dom_urls:
+        return items, 0
+    by_key = {}
+    for it in items:
+        k = _img_key(it.get("img") or "")
+        if k and k not in by_key:
+            by_key[k] = it
+    used, ordered = set(), []
+    for u in dom_urls:
+        k = _img_key(u)
+        it = by_key.get(k)
+        if it is not None and id(it) not in used:
+            used.add(id(it))
+            ordered.append(it)
+    rest = [it for it in items if id(it) not in used]
+    matched = len(ordered)
+    if matched < max(2, int(len(items) * 0.4)):
+        return items, matched
+    return ordered + rest, matched
+
+
+def _try_sales_sort(page, original_url: str) -> str:
+    """点击“销量”后尽力获取销量序。返回 url=重开排序页 / dom=按图序重排 / none=保持综合序。"""
+    try:
+        label = ensure_sort(page, ("销量", "销量排序"))
+    except Exception as exc:
+        print(f"    [排序][警告] 点击“销量”失败：{exc}")
+        return "none"
+    if not label:
+        print("    [排序][警告] 未找到“销量”排序项，保持综合顺序")
+        return "none"
+    page.wait_for_timeout(random.randint(1500, 2200))
+    url_after = page.url or ""
+    if "search_result" in url_after and not same_search_url(url_after, original_url):
+        print("    [排序] 点击“销量”后 URL 已带排序，重开一次取销量序 SSR")
+        try:
+            page.goto(url_after, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(random.randint(*PAGE_SETTLE_MS))
+            _wait_content(page)
+        except Exception as exc:
+            print(f"    [排序][警告] 重开排序页失败，保持当前数据：{exc}")
+        return "url"
+    try:
+        order = page.evaluate(JS_DOM_IMAGES)
+    except Exception:
+        order = []
+    if order:
+        try:
+            page._bkr_pdd_dom_order = order
+        except Exception:
+            pass
+        print(f"    [排序] 已点击“销量”（URL 不变），捕获渲染顺序 {len(order)} 张图，将按图序重排")
+        return "dom"
+    print("    [排序][警告] 已点击“销量”但拿不到排序结果，保持综合顺序")
+    return "none"
+
+
+def wait_human_slide(page, timeout: int = 180) -> bool:
+    """检测到滑块后不关闭浏览器，交给人工拖动，完成后自动继续。
+
+    拼多多的滑块通常可以人工在窗口里拖过；自动流程只需耐心等待，
+    轮询的是本页已渲染文本，不产生额外网络请求。
+    """
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
+    print(
+        "  [人工接管] 拼多多出现滑块验证：请在浏览器窗口里拖动滑块完成拼图，"
+        f"完成后自动继续（最多等待 {timeout // 60} 分钟）"
+    )
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(2)
+        try:
+            head = _clean(page.inner_text("body", timeout=2000))[:2500]
+            cur_url = (page.url or "").lower()
+        except Exception:
+            return False
+        if "captcha" in cur_url or any(m in head for m in _SLIDER_MARKERS):
+            continue
+        print("  [人工接管] 滑块已通过，继续采集")
+        return True
+    print("  [人工接管] 等待超时：滑块未完成，本批将暂停（可人工完成后重新开始/续采）")
+    return False
+
+
+def _check_or_wait_human(page) -> None:
+    """先做常规检查；仅当命中滑块时停下来等人工处理，其余仍按原规则暂停。"""
+    try:
+        check_pdd_blocked(page)
+    except LoginError:
+        raise
+    except BlockedError:
+        head = ""
+        try:
+            head = _clean(page.inner_text("body", timeout=2000))[:2500]
+        except Exception:
+            pass
+        is_slide = any(m in head for m in _SLIDER_MARKERS) or "captcha" in (page.url or "").lower()
+        if not is_slide:
+            raise
+        if not wait_human_slide(page):
+            raise
+        check_pdd_blocked(page)
+
+
 # ———————————————————— 搜索页：打开与解析 ————————————————————
 
 
@@ -490,11 +623,10 @@ def open_search_page(ctx, task, pageno: int):
             print("  [警告] 页面 20 秒内未完成渲染（rawData/商品链接均未出现），继续尝试兜底解析")
         else:
             print(f"  页面已就绪（{mode}）")
-        check_pdd_blocked(page)
-        # 拼多多 H5 的销量排序数据走 XHR 后重渲染，SSR 快照不跟随；
-        # 为了让"同一 URL 只访问一次、少发请求"，这里不点排序页签，
-        # 统一采用默认排序口径（跨批次可比），单品销量以详情页为准。
-        print("    [排序] 拼多多网页版使用默认排序（综合口径，SSR 快照）")
+        _check_or_wait_human(page)
+        # —— 销量排序（尽力而为）：URL 变排序页则重开取销量序 SSR；否则按 DOM 图序重排 ——
+        _try_sales_sort(page, url)
+        _check_or_wait_human(page)
         _scroll_list(page)
         try:
             page._bkr_pdd_scrolled = True
@@ -571,6 +703,11 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
                     f"    [口径] {storeish}/{len(items)} 条卡片销量是店铺累计口径，已忽略"
                     "（单品销量以详情页为准）"
                 )
+        dom_order = getattr(page, "_bkr_pdd_dom_order", None)
+        if items and dom_order:
+            items, matched = _reorder_items_by_images(items, dom_order)
+            if matched >= 2:
+                print(f"    [排序] 已按页面渲染顺序重排候选（图片匹配 {matched}/{len(items)}）")
         for it in items:
             c = normalize_ssr_card(it, task)
             if c:
@@ -623,7 +760,7 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
 
 def extract_from_page(page, item_id: str, save_html: bool = False) -> dict:
     page.wait_for_timeout(random.randint(*PAGE_SETTLE_MS))
-    check_pdd_blocked(page)
+    _check_or_wait_human(page)
     for _ in range(random.randint(3, MAX_SCROLLS)):
         try:
             page.mouse.wheel(0, random.randint(*SCROLL_STEP_PX))
@@ -744,7 +881,15 @@ def probe(keyword: str = "手表", save_html: bool = True) -> None:
                 if dkeys:
                     print(f"[probe] 现有 keys：{dkeys}")
 
-            print("[probe] 排序：网页版 SSR 不跟随销量排序，跳过点击（统一默认排序口径）")
+            url_before = page.url or ""
+            sort_mode = _try_sales_sort(page, url_before)
+            print(f"[probe] 排序尝试结果：{sort_mode}；当前 URL：{page.url}")
+            res_sort = page.evaluate(JS_SSR_LIST)
+            items_sort = res_sort.get("items") or []
+            print(f"[probe] 排序后 SSR 条数：{len(items_sort)}，首个 goodsID："
+                  f"{items_sort[0].get('goodsID') if items_sort else None}")
+            dom_order = getattr(page, "_bkr_pdd_dom_order", None)
+            print(f"[probe] DOM 图序捕获数量：{len(dom_order) if dom_order else 0}")
 
             _scroll_list(page)
             res2 = page.evaluate(JS_SSR_LIST)
