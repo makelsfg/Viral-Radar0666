@@ -129,6 +129,29 @@ def _sources_label(evidence: dict) -> str:
     return "；".join(parts) or "未知来源"
 
 
+_REQUIRED_SECTIONS = ("## 1.", "## 2.", "## 3.", "## 4.", "## 5.")
+
+
+def _ensure_complete(llm, messages, text, tools) -> str:
+    """检查五节骨架；缺章节视为截断，自动要求模型从断点续写并拼接。"""
+    missing = [h for h in _REQUIRED_SECTIONS if h not in (text or "")]
+    if not missing:
+        return text
+    from langchain_core.messages import HumanMessage
+
+    print(f"[expert] 草稿不完整（缺少 {missing}），自动续写补全")
+    cont = list(messages) + [HumanMessage(
+        content=(
+            f"上面这份报告不完整（缺少章节 {', '.join(missing)} 或中途被截断）。"
+            "请从断点继续输出剩余部分：不要重复已写内容，不要写新章节，直到五节全部完成。"
+        )
+    )]
+    extra = _invoke_with_tools(llm, cont, tools, use_tools=False)
+    if (extra or "").strip():
+        return (text or "").rstrip() + "\n\n" + extra.strip()
+    return text
+
+
 def _writer(
     state: ExpertState,
     feedback: dict | None,
@@ -155,17 +178,18 @@ def _writer(
     ]
     # 修订轮不挂工具：多为编辑/补全任务，钉死单轮可显著降低“工具循环后空输出”的概率
     text = _invoke_with_tools(llm, messages, tools, use_tools=(feedback is None))
-    if (text or "").strip():
-        return text
-    from langchain_core.messages import HumanMessage
+    if not (text or "").strip():
+        from langchain_core.messages import HumanMessage
 
-    messages.append(HumanMessage(
-        content="上一次输出为空。请直接输出完整报告全文（Markdown，八节），不要调用任何工具。"
-    ))
-    retry = _invoke_with_tools(llm, messages, tools, use_tools=False)
-    if (retry or "").strip():
-        print("[expert] 空输出已通过无工具重试恢复")
-    return retry
+        messages.append(HumanMessage(
+            content="上一次输出为空。请直接输出完整报告全文（Markdown，五节模板），不要调用任何工具。"
+        ))
+        text = _invoke_with_tools(llm, messages, tools, use_tools=False)
+        if (text or "").strip():
+            print("[expert] 空输出已通过无工具重试恢复")
+    if (text or "").strip():
+        text = _ensure_complete(llm, messages, text, tools)
+    return text
 
 
 def _reviewer(state: ExpertState) -> dict:
