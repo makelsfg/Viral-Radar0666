@@ -62,12 +62,11 @@ def _apply_settings_to_env(settings: dict) -> None:
 
     pdd = settings.get("pdd") or {}
     if isinstance(pdd, dict):
-        if pdd.get("client_id"):
-            os.environ.setdefault("BK_PDD_CLIENT_ID", str(pdd["client_id"]).strip())
-        if pdd.get("client_secret"):
-            os.environ.setdefault("BK_PDD_CLIENT_SECRET", str(pdd["client_secret"]).strip())
-        if pdd.get("pid"):
-            os.environ.setdefault("BK_PDD_PID", str(pdd["pid"]).strip())
+        try:
+            cap = int(pdd.get("detail_batch") or 10)
+        except (TypeError, ValueError):
+            cap = 10
+        os.environ.setdefault("BK_PDD_DETAIL_BATCH", str(max(1, min(cap, 10))))
 
     expert = settings.get("expert") or {}
     if isinstance(expert, dict):
@@ -94,6 +93,9 @@ def _apply_settings_to_env(settings: dict) -> None:
 
 
 _apply_settings_to_env(_load_settings())
+
+# 拼多多单批详情上限：网页模式官方建议 ≤10，settings.pdd.detail_batch 只能调低。
+PDD_DETAIL_CAP = max(1, min(int(os.environ.get("BK_PDD_DETAIL_BATCH") or 10), 10))
 
 DATA_DIR = Path(os.environ.get("BK_DATA_DIR", ROOT / "data"))
 RAW_DIR = DATA_DIR / "raw"

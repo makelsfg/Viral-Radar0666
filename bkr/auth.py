@@ -14,7 +14,6 @@ from pathlib import Path
 
 from .browser import has_login_cookies, has_pdd_login_cookies
 from .config import profile_dir_for
-from .providers import pdd_ddk
 
 
 def _query_names(db_path: Path) -> set[str]:
@@ -76,21 +75,17 @@ def _authorized_from_names(platform: str, names: set[str]) -> bool:
     if platform == "1688":
         return bool({"__cn_logon__", "_cn_"} & names)
     if platform == "pdd":
-        # 拼多多走官方开放平台 API，不再依赖 H5 登录 cookie
-        return pdd_ddk.configured()
+        # 拼多多走 H5 网页采集，依赖浏览器登录 cookie
+        return has_pdd_login_cookies(names)
     return False
 
 
 def is_authorized(platform: str) -> bool:
-    if platform == "pdd":
-        return pdd_ddk.configured()
     return _authorized_from_names(platform, cookie_names(platform))
 
 
 def probe_authorized(platform: str) -> tuple[bool, bool]:
     """返回 (是否授权, 结果是否可靠)。读不到 cookie 文件时 reliable=False。"""
-    if platform == "pdd":
-        return pdd_ddk.configured(), True
     try:
         names = _read_names(platform)
     except Exception:

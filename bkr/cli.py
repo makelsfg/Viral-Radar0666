@@ -106,6 +106,12 @@ def cmd_debug_search(args) -> None:
     debug_search(_find_task(args.task), page_no=args.page)
 
 
+def cmd_pdd_probe(args) -> None:
+    """拼多多实机校准：打开一次搜索页，输出 SSR 路径/字段/滚动前后条数。"""
+    from .platforms.pinduoduo import probe
+    probe(keyword=args.keyword, save_html=args.save_html)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bkr", description="爆款雷达 · 天猫品类采集")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -131,6 +137,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("debug-search", help="打开搜索页输出诊断信息（HTML/截图/统计）")
     p.add_argument("--task", required=True)
     p.add_argument("--page", type=int, default=1)
+
+    p = sub.add_parser("pdd-probe", help="拼多多实机校准：SSR 字段/条数/风控检查（只开 1 次搜索页）")
+    p.add_argument("--keyword", default="手表")
+    p.add_argument("--save-html", action="store_true", default=True,
+                   help="保存搜索页 HTML/截图到 data/debug（默认开启）")
+    p.add_argument("--no-save-html", dest="save_html", action="store_false")
     return parser
 
 
@@ -150,6 +162,8 @@ def main(argv=None) -> None:
             cmd_seed(args)
         elif args.cmd == "debug-search":
             cmd_debug_search(args)
+        elif args.cmd == "pdd-probe":
+            cmd_pdd_probe(args)
     except ConfigError as e:
         print(f"配置错误: {e}")
         raise SystemExit(1)

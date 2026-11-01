@@ -71,10 +71,16 @@ export function explainError(raw?: string | null): { reason: string; advice: str
       advice: '关闭所有自动化浏览器窗口（不要关日常浏览器），重启服务后重试；仍失败可把 browser.channel 临时改为空。',
     }
   }
-  if (hit(['拼多多 API', '未配置拼多多', 'client_id', 'client_secret', 'pdd.ddk'])) {
+  if (hit(['单批上限', '冷却', '续采'])) {
     return {
-      reason: '拼多多官方开放平台 API 未配置或调用失败。',
-      advice: '在 config/settings.yaml 的 pdd 段填写 client_id / client_secret（可选 pid）并重启；再确认应用已开通多多进宝商品搜索权限。',
+      reason: '拼多多网页模式限制单批详情数量（≤10 个），本批已暂停等待冷却。',
+      advice: '等待约 10 分钟后，点采集页的「继续采集」续采剩余候选；不要立即重新开始新批次。',
+    }
+  }
+  if (hit(['前往App', '前往APP', '降级', 'PddDegraded'])) {
+    return {
+      reason: '拼多多详情页出现 App 降级提示，关键数据不再返回。',
+      advice: '立即停止该平台，人工在浏览器打开确认；冷却一段时间后再续采，不要连续重试。',
     }
   }
   if (hit(['超时', 'timeout', 'Timeout', '网络', 'connection', 'Connection'])) {

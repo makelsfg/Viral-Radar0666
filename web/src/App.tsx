@@ -21,7 +21,7 @@ const { Header, Content } = Layout
 export default function App() {
   const { message } = AntApp.useApp()
   const [env, setEnv] = useState<EnvStatus | null>(null)
-  const [loginRunning, setLoginRunning] = useState<'tmall' | '1688' | null>(null)
+  const [loginRunning, setLoginRunning] = useState<'tmall' | '1688' | 'pdd' | null>(null)
   const loginRef = useRef<string | null>(null)
   const envRefreshRef = useRef(0)
 
@@ -60,8 +60,8 @@ export default function App() {
   })
 
   const startLogin = async (
-    profile: 'tmall' | '1688',
-    site: 'taobao' | '1688',
+    profile: 'tmall' | '1688' | 'pdd',
+    site: 'taobao' | '1688' | 'pdd',
   ) => {
     try {
       const job = await api.login(profile, site)
@@ -75,7 +75,7 @@ export default function App() {
 
   const tmallOk = !!env?.profiles?.tmall
   const aliOk = !!env?.profiles?.['1688']
-  const pddApi = !!env?.pdd_api
+  const pddOk = !!env?.profiles?.pdd
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -110,21 +110,16 @@ export default function App() {
             </Button>
           </Space>
           <Space size={4}>
-            <Tag color={pddApi ? 'success' : 'warning'}>
-              拼多多 {pddApi ? 'API 已配置' : '未配置 API'}
+            <Tag color={pddOk ? 'success' : 'warning'}>
+              拼多多 {pddOk ? '已登录' : '未登录'}
             </Tag>
-            {!pddApi && (
-              <Button
-                size="small"
-                onClick={() =>
-                  message.info(
-                    '在 config/settings.yaml 的 pdd 段填写 client_id / client_secret（可选 pid），重启后生效',
-                  )
-                }
-              >
-                如何配置
-              </Button>
-            )}
+            <Button
+              size="small"
+              loading={loginRunning === 'pdd'}
+              onClick={() => startLogin('pdd', 'pdd')}
+            >
+              登录拼多多
+            </Button>
           </Space>
         </Space>
       </Header>

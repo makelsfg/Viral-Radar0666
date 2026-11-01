@@ -1,26 +1,84 @@
-"""拼多多采集适配（移动网页实验版）。
+"""拼多多 H5 采集适配（网页模式）。
 
 入口：
   搜索  https://mobile.yangkeduo.com/search_result.html?search_key=…
   详情  https://mobile.yangkeduo.com/goods.html?goods_id=…
 
-说明：拼多多没有稳定的桌面网页搜索，H5 页面需要移动端 UA 与登录态，
-选择器可能随版本变化；失败时会保存 data/debug 现场并明确报错，不伪造数据。
+硬约束（详见 docs/PROMPT_拼多多网页采集.md）：
+  - 只做页面导航 / 滚动 / 读取已渲染的 DOM 与 SSR 数据，不调用任何 pdd 接口；
+  - 搜索页为无限滚动，本批固定 1 屏（task.pages>1 时忽略并告警）；
+  - 单批详情上限由 config.PDD_DETAIL_CAP 控制（≤10），超出则暂停等冷却；
+  - 遇滑块 / 登录 / 访问异常 / 降级页立即停批，不重试、不绕过；
+  - 拿不到的字段一律留空（None / [] / ""），禁止编造。
 """
 from __future__ import annotations
 
+import json
 import random
 import re
+from datetime import datetime
 from urllib.parse import quote
 
-from ..browser import BlockedError, check_blocked, get_work_page, polite_sleep
+from ..browser import (
+    BlockedError,
+    EmptyResultError,
+    LoginError,
+    get_work_page,
+)
+from ..config import DATA_DIR
 from ..pace import get_pace
-from ..parse import parse_count, parse_price, same_search_url
+from ..parse import parse_count, parse_sold_text, same_search_url
 from ..sort_ui import ensure_sort
 
 SEARCH_URL = "https://mobile.yangkeduo.com/search_result.html?search_key={q}"
 DETAIL_URL = "https://mobile.yangkeduo.com/goods.html?goods_id={iid}"
 
+# —— 页面内动作的固定节奏（实机可调，见提示词 §3.4）——
+PAGE_SETTLE_MS = (2400, 2600)
+SCROLL_STEP_PX = (700, 800)
+SCROLL_INTERVAL_MS = 600
+MAX_SCROLLS = 5
+
+# 单批详情上限的补充约束（真正的数值在 config.PDD_DETAIL_CAP）
+BATCH_COOLDOWN_MIN = 10
+
+
+class PddDegradedError(BlockedError):
+    """会话降级：页面仍可打开，但关键数据不再返回，需停止本批。"""
+
+
+# ———————————————————— 搜索页：SSR 数据（首选） ————————————————————
+
+JS_SSR_LIST = r"""
+() => {
+  const strip = (s) => String(s || '').replace(/[\u200b\u200c\u200d]/g, '');
+  const root = window.rawData;
+  if (!root) return {ok: false, why: '无 window.rawData'};
+  const store = root.stores && root.stores.store;
+  const data = store && store.data;
+  if (!data) return {ok: false, why: '无 stores.store.data',
+                     storesKeys: Object.keys(root.stores || {}).slice(0, 20)};
+  const list = data.ssrListData && data.ssrListData.list;
+  if (!Array.isArray(list)) {
+    return {ok: false, why: '无 ssrListData.list',
+            dataKeys: Object.keys(data).slice(0, 30)};
+  }
+  return {
+    ok: true,
+    count: list.length,
+    keys: list.length ? Object.keys(list[0]).slice(0, 40) : [],
+    items: list.map((it) => ({
+      goodsID: strip(it.goodsID ?? it.goods_id ?? it.goodsId ?? ''),
+      goodsName: strip(it.goodsName ?? it.goods_name ?? ''),
+      price: it.price ?? it.min_group_price ?? it.minGroupPrice ?? it.groupPrice ?? null,
+      salesTip: strip(it.salesTip ?? it.sales_tip ?? ''),
+      img: strip(it.hdThumbUrl ?? it.thumbUrl ?? it.image_url ?? it.imgUrl ?? ''),
+    })),
+  };
+}
+"""
+
+# 兜底：goods.html 锚点解析（SSR 路径失效时使用，仍走同一套归一化）
 JS_CARDS = r"""
 () => {
   const out = [], seen = new Set();
@@ -35,7 +93,7 @@ JS_CARDS = r"""
       const t = el.innerText || '';
       if ((t.includes('¥') || t.includes('￥')) && t.length < 600) break;
     }
-    const text = (el.innerText || '').trim().slice(0, 600);
+    const text = (el.innerText || '').replace(/[\u200b\u200c\u200d]/g, '').trim().slice(0, 600);
     const imgEl = el.querySelector('img');
     let img = imgEl ? (imgEl.currentSrc || imgEl.src || '') : '';
     if (img.startsWith('//')) img = 'https:' + img;
@@ -46,29 +104,100 @@ JS_CARDS = r"""
 }
 """
 
+# ———————————————————— 详情页：DOM + 文本 ————————————————————
+
 JS_DETAIL = r"""
 () => {
+  const strip = (s) => String(s || '').replace(/[\u200b\u200c\u200d]/g, '');
   const out = {};
-  const txt = (document.body.innerText || '');
-  out.header = txt.slice(0, 3000);
-  const h1 = document.querySelector('h1')
-    || document.querySelector('[class*="goods-name"]')
-    || document.querySelector('[class*="goodsName"]');
-  out.title = h1 ? (h1.innerText || '').trim().split('\n')[0]
-                 : (document.title || '').split('-')[0].trim();
-  const imgs = Array.from(document.querySelectorAll('img'))
-    .map(i => i.currentSrc || i.src || '')
-    .filter(u => u.startsWith('http'));
-  out.image_url = imgs.find(u => /pddpic|yangkeduo|pinduoduo/.test(u)) || imgs[0] || '';
-  out.sku_texts = Array.from(document.querySelectorAll('[class*="sku"]'))
-    .map(e => e.innerText || '').slice(0, 40);
+  const grab = (sel) => {
+    const el = document.querySelector(sel);
+    return el ? strip(el.innerText || '').trim() : '';
+  };
+  out.title = grab('h1')
+    || grab('[class*="goods-name"]')
+    || grab('[class*="goodsName"]');
+  const bodyText = strip((document.body && document.body.innerText) || '');
+  out.top_text = bodyText.slice(0, 8000);
+
+  const junk = /logo|icon|avatar|客服|扫一扫|分享|收藏/i;
+  let image = '', best = 0;
+  document.querySelectorAll('img').forEach((im) => {
+    const s = im.currentSrc || im.src || im.getAttribute('data-src') || '';
+    if (!s || junk.test((im.alt || '') + s)) return;
+    const w = im.naturalWidth || 0;
+    if (w >= 150 && w > best) { best = w; image = s; }
+  });
+  out.image_url = image && image.startsWith('//') ? 'https:' + image : image;
+  const v = document.querySelector('video');
+  out.video_url = v ? (v.currentSrc || v.src || '') : '';
+
+  // 参数栏：常见容器里的「键：值」行；拿不到就空，不猜
+  const attrs = {};
+  const pushKV = (k, val) => {
+    k = strip(k || '').replace(/[:：]\s*$/, '').trim();
+    val = strip(val || '').trim();
+    if (k && val && k.length <= 20 && val.length <= 100 && !(k in attrs)) attrs[k] = val;
+  };
+  document.querySelectorAll(
+    '[class*="param"] li, [class*="attr"] li, [class*="prop"] li, [class*="spec"] li'
+  ).forEach((li) => {
+    const t = strip(li.innerText || '').trim();
+    const m = t.match(/^([^：:]{1,20})[：:]\s*(.{1,100})$/);
+    if (m) pushKV(m[1], m[2]);
+  });
+  document.querySelectorAll('dl').forEach((dl) => {
+    dl.querySelectorAll('dt').forEach((dt) => {
+      const dd = dt.nextElementSibling;
+      if (dd && dd.tagName === 'DD') pushKV(dt.innerText, dd.innerText);
+    });
+  });
+  out.attrs = attrs;
+
+  // 规格：只收当前已渲染的叶子文本（弹层需点击的拿不到，按约定留空）
+  const sku = new Set();
+  document.querySelectorAll('[class*="sku"],[class*="Sku"],[class*="spec"],[class*="Spec"]')
+    .forEach((box) => {
+      box.querySelectorAll('*').forEach((n) => {
+        if (n.children.length === 0) {
+          const t = strip(n.innerText || '').trim();
+          if (t.length >= 2 && t.length <= 60) sku.add(t);
+        }
+      });
+    });
+  out.sku_texts = Array.from(sku).slice(0, 60);
   return out;
 }
 """
 
-_SOLD_RE = re.compile(r"(?:已拼|已售|销量)\s*([\d.]+[万wW千kK]?\+?)\s*(?:件|单|笔)?")
+# ———————————————————— 文本解析（纯函数，可单测） ———————————————————
+
+_SOLD_ITEM_RE = re.compile(r"已拼\s*(\d+(?:\.\d+)?)\s*([万wW千kK]?)\+?\s*(?:件|单|笔)?")
+
+_SHOP_SOLD_RE = re.compile(r"(?:本店|店铺)已拼[^\n]{0,14}")
 _BAD_TITLE_PARTS = ("¥", "￥", "已拼", "已售", "人拼", "人付款", "包邮", "退货", "补贴", "广告")
-_SKU_JUNK = {"选择规格", "选择", "确定", "取消", "立即购买"}
+_SKU_JUNK = {
+    "选择规格", "选择", "确定", "取消", "立即购买", "单独购买", "发起拼单",
+    "已选", "发货", "包邮", "评价", "服务", "详情",
+}
+_COUPON_PRICE_RE = re.compile(r"券后(?:价)?\s*[¥￥]?\s*(\d+(?:\.\d+)?)")
+_PDD_PRICE_RE = re.compile(r"[¥￥]\s*(\d+(?:\.\d+)?)")
+_EVAL_COUNT_RE = re.compile(r"(?:商品评价|评价)[（(]\s*([\d,，]+)\s*[）)]")
+_DELIVER_RE = re.compile(r"发货地\s*[:：]?\s*([^\n]{2,30})")
+_SERVICE_KEYS = (
+    "48小时发货", "48小时内发货", "7天无理由", "七天无理由", "假一赔十",
+    "保证金", "包邮", "极速退款", "退货包运费", "极速发货",
+)
+_DEGRADED_MARKERS = ("前往app查看价格", "打开app查看", "app内打开", "前往app查看",)
+
+# 滑块 / 登录 / 访问异常的判定文案（仅用于拼多多，不影响天猫/1688）
+_SLIDER_MARKERS = ("请拖动下方滑块", "拖动滑块完成验证", "滑动验证", "完成安全验证")
+_LOGIN_MARKERS = ("手机号登录", "扫码登录", "验证码登录", "请登录后查看")
+_ACCESS_MARKERS = ("访问异常", "系统繁忙", "访问受限")
+
+
+def _clean(text) -> str:
+    return str(text or "").replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
 
 
 def _fix_img(src: str) -> str:
@@ -83,42 +212,193 @@ def _fix_img(src: str) -> str:
     return src
 
 
+def is_degraded(text) -> bool:
+    """降级页判定只认正向证据，双缺失（店铺+评价）只告警，不在此视为降级。"""
+    t = str(text or "").lower()
+    return any(m in t for m in _DEGRADED_MARKERS)
+
+
+def parse_pdd_price(text) -> tuple[float | None, str]:
+    """返回 (价格, 口径)。被遮挡的价格（如 ¥3.?）返回 (None, ...)，不做猜测。"""
+    t = _clean(text)
+    for pat, label in ((_COUPON_PRICE_RE, "券后价"), (_PDD_PRICE_RE, "拼单价")):
+        for m in pat.finditer(t):
+            tail = t[m.end(): m.end() + 4]
+            if tail.startswith(("?", "？")) or re.match(r"\s*[.．]\s*[?？]", tail):
+                continue
+            return round(float(m.group(1)), 2), label
+    if re.search(r"[¥￥][^\d\n]{0,3}[?？]", t):
+        return None, "未知（价格被遮挡）"
+    return None, "未知"
+
+
+def parse_pdd_sold(text) -> tuple[str | None, int | None]:
+    """只取单品「已拼X件」；先剔除「本店/店铺已拼」累计片段。"""
+    t = _SHOP_SOLD_RE.sub("", _clean(text))
+    m = _SOLD_ITEM_RE.search(t)
+    if not m:
+        return None, None
+    frag = m.group(0).strip()
+    return frag, parse_count(m.group(1) + (m.group(2) or ""))
+
+
+def parse_pdd_shop(text) -> str | None:
+    """「本店已拼…」上方紧邻的非空文本行视为店铺名；找不到就 None，不猜。"""
+    lines = [l.strip() for l in _clean(text).split("\n") if l.strip()]
+    for i, line in enumerate(lines):
+        if "本店已拼" in line or "店铺已拼" in line:
+            for back in range(1, 4):
+                j = i - back
+                if j < 0:
+                    break
+                cand = lines[j]
+                if 2 <= len(cand) <= 30 and not any(
+                    t in cand for t in ("¥", "￥", "已拼", "评价", "收藏", "人付款", "服务")
+                ):
+                    return cand
+            break
+    return None
+
+
+def _province(s: str) -> str:
+    m = re.search(r"(.+?(?:省|市|自治区|特别行政区))", s)
+    return m.group(1) if m else s.strip()
+
+
+def parse_pdd_params(text) -> dict:
+    """从详情页文本提取通用参数：评价数 / 发货地 / 服务 / 店铺已拼。"""
+    out: dict = {}
+    t = _clean(text)
+    m = _EVAL_COUNT_RE.search(t)
+    if m:
+        out["评价数"] = m.group(1).replace(",", "").replace("，", "")
+    m = _DELIVER_RE.search(t)
+    if m:
+        out["发货地"] = _province(m.group(1))
+    tags = [k for k in _SERVICE_KEYS if k in t]
+    if tags:
+        out["服务"] = "、".join(dict.fromkeys(tags))
+    m = _SHOP_SOLD_RE.search(t)
+    if m:
+        out["店铺已拼"] = m.group(0).strip()
+    return out
+
+
+# ———————————————————— 卡片归一化 ————————————————————
+
+
+def _cents_to_yuan(value) -> float | None:
+    """SSR 价格为整数「分」；非法/可疑值返回 None（不写进候选价）。"""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str):
+            v = value.strip()
+            if not re.fullmatch(r"\d+", v):
+                return None
+            cents = int(v)
+        elif isinstance(value, bool):
+            return None
+        else:
+            cents = int(value)
+    except (TypeError, ValueError):
+        return None
+    if cents <= 0 or cents > 100_000_000:
+        return None
+    return round(cents / 100, 2)
+
+
 def _pick_title(raw: dict) -> str:
     title = (raw.get("title_attr") or "").strip()
     if title:
         return title
-    lines = [l.strip() for l in (raw.get("text") or "").split("\n") if l.strip()]
+    lines = [l.strip() for l in _clean(raw.get("text")).split("\n") if l.strip()]
     cand = [l for l in lines if len(l) >= 4 and not any(b in l for b in _BAD_TITLE_PARTS)]
     return max(cand, key=len) if cand else (lines[0] if lines else "")
 
 
-def normalize_card(raw: dict, task) -> dict | None:
-    text = raw.get("text") or ""
-    title = _pick_title(raw)
-    for w in getattr(task, "exclude_words", []):
+def _apply_filters(task, title: str, text: str, price: float | None) -> bool:
+    for w in getattr(task, "exclude_words", []) or []:
         if w and (w in title or w in text):
-            return None
-    iid = raw.get("item_id")
-    if not iid:
-        return None
-    price = parse_price(text)
+            return False
     if price is not None:
         if task.price_min is not None and price < task.price_min:
-            return None
+            return False
         if task.price_max is not None and price > task.price_max:
-            return None
-    m = _SOLD_RE.search(text)
-    price_m = re.search(r"[¥￥]\s*\d+(?:\.\d+)?", text)
+            return False
+    return True
+
+
+def normalize_ssr_card(it: dict, task) -> dict | None:
+    """SSR 列表条目 → 统一候选结构（与天猫/1688 同一口径）。"""
+    iid = str(it.get("goodsID") or "").strip()
+    if not iid:
+        return None
+    title = _clean(it.get("goodsName"))
+    price = _cents_to_yuan(it.get("price"))
+    if not _apply_filters(task, title, title, price):
+        return None
+    sold_text, sold_lb = parse_sold_text(_clean(it.get("salesTip")))
     return {
         "item_id": iid,
         "title": title,
-        "price_text": price_m.group(0) if price_m else None,
-        "sold_text": m.group(0) if m else None,
-        "sold_lb": parse_count(m.group(1)) if m else None,
+        "price_text": f"¥{price:.2f}" if price is not None else None,
+        "sold_text": sold_text,
+        "sold_lb": sold_lb,
+        "shop_name": None,
+        "image_url": _fix_img(str(it.get("img") or "").strip()),
+        "url": DETAIL_URL.format(iid=iid),
+    }
+
+
+def normalize_card(raw: dict, task) -> dict | None:
+    """goods.html 锚点兜底条目 → 统一候选结构（.price.Text 口径与 SSR 一致）。"""
+    text = _clean(raw.get("text"))
+    title = _pick_title(raw)
+    iid = str(raw.get("item_id") or "").strip()
+    if not iid:
+        return None
+    price = None
+    m = re.search(r"[¥￥]\s*(\d+(?:\.\d+)?)", text)
+    if m:
+        price = round(float(m.group(1)), 2)
+    if not _apply_filters(task, title, text, price):
+        return None
+    sold_text, sold_lb = parse_pdd_sold(text)
+    return {
+        "item_id": iid,
+        "title": title,
+        "price_text": m.group(0) if m else None,
+        "sold_text": sold_text,
+        "sold_lb": sold_lb,
         "shop_name": None,
         "image_url": _fix_img(raw.get("img") or ""),
         "url": DETAIL_URL.format(iid=iid),
     }
+
+
+# ———————————————————— 风控 / 登录 / 降级检查 ————————————————————
+
+
+def check_pdd_blocked(page) -> None:
+    """拼多多专属检查：滑块 / 登录页 / 访问异常（不改变天猫/1688 的判定）。"""
+    url = (page.url or "").lower()
+    try:
+        head = _clean(page.inner_text("body", timeout=3000))[:3000]
+    except Exception:
+        head = ""
+    if "login.html" in url or any(m in head for m in _LOGIN_MARKERS):
+        raise LoginError(
+            "拼多多未登录或登录态失效：请先执行 python -m bkr.cli login --site pdd"
+            "（手机号验证码），登录成功后再 --resume 续采"
+        )
+    if "captcha" in url or any(m in head for m in _SLIDER_MARKERS):
+        raise BlockedError("拼多多出现滑块验证，请人工在浏览器完成验证后执行 --resume 续采")
+    if any(m in head for m in _ACCESS_MARKERS):
+        raise BlockedError("拼多多返回访问异常/系统繁忙，请人工确认恢复并冷却一段时间后再续采")
+
+
+# ———————————————————— 搜索页：打开与解析 ————————————————————
 
 
 def search_url(task, pageno: int) -> str:
@@ -126,67 +406,116 @@ def search_url(task, pageno: int) -> str:
 
 
 def open_search_page(ctx, task, pageno: int):
-    """拼多多 H5 为无限滚动：第 N 页通过向下滚动加载；返回工作标签页。"""
+    """拼多多 H5 为无限滚动：固定单屏采集，第 N 页参数被忽略并告警。"""
     page = get_work_page(ctx)
-    url = search_url(task, pageno)
-    print(f"  拼多多搜索页 {pageno}/{task.pages}: {url}")
-    try:
-        if not same_search_url(page.url or "", url):
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            try:
-                page.wait_for_selector('a[href*="goods.html"]', timeout=20000)
-            except Exception:
-                pass
-            page.wait_for_timeout(2000)
-        ensure_sort(page, ("销量", "销量排序"))
+    url = search_url(task, 1)
+    if pageno > 1 and not getattr(page, "_bkr_pdd_no_page_warn", False):
+        print("  [警告] 拼多多搜索为无限滚动，本批固定采 1 屏（搜索页数参数被忽略）")
         try:
-            page.wait_for_selector('a[href*="goods.html"]', timeout=10000)
+            page._bkr_pdd_no_page_warn = True
         except Exception:
             pass
-        # 第 2 页起向下滚动加载更多
-        for _ in range(max(0, pageno - 1) * 4):
-            try:
-                page.mouse.wheel(0, random.randint(1200, 1800))
-                page.wait_for_timeout(random.randint(900, 1500))
-            except Exception:
-                break
-        page.wait_for_timeout(800)
-        check_blocked(page)
-    except Exception:
-        raise
+    print(f"  拼多多搜索页: {url}")
+    if not same_search_url(page.url or "", url):
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(random.randint(*PAGE_SETTLE_MS))
+        ensure_sort(page, ("销量", "销量排序"))
+        check_pdd_blocked(page)
+        _scroll_list(page)
+        try:
+            page._bkr_pdd_scrolled = True
+        except Exception:
+            pass
+    elif not getattr(page, "_bkr_pdd_scrolled", False):
+        _scroll_list(page)
+        try:
+            page._bkr_pdd_scrolled = True
+        except Exception:
+            pass
     return page
 
 
+def _scroll_list(page) -> None:
+    """滚动 3–5 屏，让搜索页加载更多商品（页面自身行为，不调用接口）。"""
+    for _ in range(random.randint(3, MAX_SCROLLS)):
+        try:
+            page.mouse.wheel(0, random.randint(*SCROLL_STEP_PX))
+            page.wait_for_timeout(SCROLL_INTERVAL_MS)
+        except Exception:
+            break
+    try:
+        page.wait_for_timeout(600)
+    except Exception:
+        pass
+
+
+def _dump_search_page(page) -> str:
+    d = DATA_DIR / "debug"
+    d.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    html_path = d / f"pdd_search_{stamp}.html"
+    png_path = d / f"pdd_search_{stamp}.png"
+    try:
+        html_path.write_text(page.content(), encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        page.screenshot(path=str(png_path), full_page=False)
+    except Exception:
+        pass
+    return str(d)
+
+
 def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
+    """搜索页 → 候选列表。优先读 SSR 数据，SSR 失效时退回锚点解析。"""
+    if task.pages > 1:
+        print(f"  [警告] 拼多多为无限滚动搜索，忽略搜索页数 {task.pages}（固定 1 屏）")
+    page = open_search_page(ctx, task, 1)
+
     cards: list[dict] = []
-    for pageno in range(start_page, task.pages + 1):
-        page = open_search_page(ctx, task, pageno)
+    res = page.evaluate(JS_SSR_LIST)
+    if res.get("ok"):
+        items = res.get("items") or []
+        print(f"  拼多多 SSR 列表 {len(items)} 条")
+        if items:
+            keys = ", ".join(res.get("keys") or [])
+            print(f"    [校准] SSR 字段：{keys[:160]}")
+        for it in items:
+            c = normalize_ssr_card(it, task)
+            if c:
+                c["page_no"] = 1
+                cards.append(c)
+    else:
+        why = res.get("why") or "未知"
+        print(f"  [警告] 未找到 SSR 数据路径：{why}")
+        keys = res.get("dataKeys") or res.get("storesKeys") or []
+        if keys:
+            print(f"    [排查] 现有 keys：{', '.join(str(k) for k in keys[:20])}")
+
+    if not cards:
         raws = page.evaluate(JS_CARDS)
-        if not raws:
-            from ..list_collector import _dump_search_page
-
-            d = _dump_search_page(page, task, pageno)
-            from ..browser import EmptyResultError
-
-            raise EmptyResultError(
-                f"拼多多搜索页 {pageno} 解析到 0 个商品（未登录/风控/改版）。诊断文件：{d}"
-            )
         for r in raws:
             c = normalize_card(r, task)
             if c:
-                c["page_no"] = pageno
+                c["page_no"] = 1
                 cards.append(c)
-        print(f"  拼多多本页解析 {len(raws)} 张卡片，累计 {len(cards)} 个")
-        solds = [c["sold_lb"] for c in cards
-                 if c.get("page_no") == pageno and c.get("sold_lb")]
-        if solds:
-            vals = solds[:8]
-            print(f"    [校验] 拼多多第 {pageno} 页前 {len(vals)} 个已拼下限：{vals}")
-            inv = sum(1 for a, b in zip(vals, vals[1:]) if a < b)
-            if inv >= max(1, len(vals) // 3):
-                print("    [校验][警告] 已拼值整体不是降序，拼多多排序可能未生效")
-        pace = get_pace(getattr(task, "pace", "safe"))
-        polite_sleep(pace["list_lo"], pace["list_hi"])
+        if cards:
+            print(f"  [兜底] SSR 不可用，使用 goods.html 锚点解析（{len(cards)} 个）；请把此现象反馈校准 SSR 路径")
+
+    if not cards:
+        d = _dump_search_page(page)
+        raise EmptyResultError(
+            f"拼多多搜索页解析到 0 个商品（未登录/风控/改版）。诊断文件：{d}；"
+            "建议先运行 python -m bkr.cli pdd-probe 校准"
+        )
+
+    solds = [c["sold_lb"] for c in cards if c.get("sold_lb")]
+    if solds:
+        vals = solds[:8]
+        print(f"    [校验] 已拼下限前 {len(vals)} 个：{vals}")
+        inv = sum(1 for a, b in zip(vals, vals[1:]) if a < b)
+        if inv >= max(1, len(vals) // 3):
+            print("    [校验][警告] 已拼值整体不是降序，拼多多排序可能未生效")
 
     seen, out = set(), []
     for c in cards:
@@ -198,40 +527,63 @@ def collect_pages(ctx, task, start_page: int = 1) -> list[dict]:
     return out
 
 
+# ———————————————————— 详情页 ————————————————————
+
+
 def extract_from_page(page, item_id: str, save_html: bool = False) -> dict:
-    try:
-        page.wait_for_selector("h1, [class*='goods-name'], [class*='goodsName']", timeout=15000)
-    except Exception:
-        pass
-    page.wait_for_timeout(random.randint(1500, 2500))
+    page.wait_for_timeout(random.randint(*PAGE_SETTLE_MS))
+    check_pdd_blocked(page)
+    for _ in range(random.randint(3, MAX_SCROLLS)):
+        try:
+            page.mouse.wheel(0, random.randint(*SCROLL_STEP_PX))
+            page.wait_for_timeout(SCROLL_INTERVAL_MS)
+        except Exception:
+            break
+
     data = page.evaluate(JS_DETAIL)
     html = page.content() if save_html else None
-    if not (data.get("title") or data.get("image_url")):
-        raise BlockedError(
-            "拼多多详情页未正常加载（可能登录失效/风控/改版），已暂停；"
-            "请人工打开确认后重试"
+    title = _clean(data.get("title")).strip()
+    region = _clean(data.get("top_text"))
+    if not title and not region:
+        raise BlockedError("拼多多详情页未正常加载（可能登录失效/风控），已暂停")
+
+    if is_degraded(region):
+        raise PddDegradedError(
+            "拼多多详情页出现降级提示（前往App查看价格等），本批已停；"
+            "请人工确认后冷却一段时间再续采"
         )
-    header = data.get("header") or ""
-    m = _SOLD_RE.search(header)
+
+    price, caliber = parse_pdd_price(region)
+    sold_text, sold_lb = parse_pdd_sold(region)
+    shop_name = parse_pdd_shop(region)
+    params = dict(data.get("attrs") or {})
+    params.update(parse_pdd_params(region))
+    params["价格口径"] = caliber
+
+    has_eval = bool(_EVAL_COUNT_RE.search(region))
+    if not shop_name and not has_eval:
+        print("    [警告] 店铺名与评价区均未识别（可能是布局变体，本条按已采数据入库）")
+
     skus = [
         s.strip() for s in (data.get("sku_texts") or [])
         if s.strip() and s.strip() not in _SKU_JUNK and len(s.strip()) <= 60
     ][:40]
+
     return {
         "item_id": item_id,
-        "title": data.get("title") or "",
-        "price_final": parse_price(header),
-        "sold_text": m.group(0) if m else None,
-        "sold_lb": parse_count(m.group(1)) if m else None,
-        "cart_text": None,
+        "title": title,
+        "price_final": price,
+        "sold_text": sold_text,
+        "sold_lb": sold_lb,
+        "cart_text": None,  # 拼多多 H5 无加购数，不用销量冒充
         "cart_lb": None,
-        "shop_name": None,
+        "shop_name": shop_name,
         "shop_rating": None,
         "positive_rate": None,
         "sku_names": skus,
-        "params": {},
-        "image_url": data.get("image_url") or "",
-        "video_url": "",
+        "params": params if params else {},
+        "image_url": _fix_img(data.get("image_url") or ""),
+        "video_url": data.get("video_url") or "",
         "product_url": DETAIL_URL.format(iid=item_id),
         "_html": html,
     }
@@ -253,3 +605,66 @@ def click_and_extract(ctx, list_page, item_id: str, save_html: bool = False) -> 
             detail_page.close()
         except Exception:
             pass
+
+
+# ———————————————————— 实机校准探针（不写数据库） ————————————————————
+
+
+def probe(keyword: str = "手表", save_html: bool = True) -> None:
+    """打开拼多多搜索页，输出 SSR 路径/字段/滚动前后条数，供首跑校准。
+
+    用法：python -m bkr.cli pdd-probe --keyword 手表
+    不写数据库、不采详情，只有一次搜索页加载。
+    """
+    from ..browser import browser_runtime, close_context, launch_context, has_pdd_login_cookies
+    from ..config import profile_dir_for
+
+    with browser_runtime() as p:
+        ctx = launch_context(p, profile_dir=profile_dir_for("pdd"), platform="pdd")
+        try:
+            try:
+                names = {c.get("name") for c in ctx.cookies()}
+                print(f"[probe] 登录态：{'已登录' if has_pdd_login_cookies(names) else '未登录（请先 bkr login --site pdd）'}")
+            except Exception:
+                pass
+            page = ctx.new_page()
+            url = SEARCH_URL.format(q=quote(keyword))
+            print(f"[probe] 打开：{url}")
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(random.randint(*PAGE_SETTLE_MS))
+            try:
+                check_pdd_blocked(page)
+            except (LoginError, BlockedError) as e:
+                print(f"[probe] 风控/登录检查未通过：{e}")
+                if save_html:
+                    print(f"[probe] 现场已保存：{_dump_search_page(page)}")
+                return
+
+            res = page.evaluate(JS_SSR_LIST)
+            print(f"[probe] window.rawData 存在：{bool(page.evaluate('() => !!window.rawData'))}")
+            print(f"[probe] SSR 可用：{res.get('ok')}，原因：{res.get('why') or '—'}")
+            print(f"[probe] SSR 条数（滚动前）：{res.get('count')}")
+            keys = res.get("keys") or []
+            if keys:
+                print(f"[probe] 首个条目的字段 keys：{keys}")
+            if not res.get("ok"):
+                dkeys = res.get("dataKeys") or res.get("storesKeys") or []
+                if dkeys:
+                    print(f"[probe] 现有 keys：{dkeys}")
+
+            _scroll_list(page)
+            res2 = page.evaluate(JS_SSR_LIST)
+            print(f"[probe] SSR 条数（滚动后）：{res2.get('count')}（若不变，说明滚动不更新 SSR 数据）")
+
+            anchors = page.evaluate(JS_CARDS)
+            print(f"[probe] DOM 锚点卡片数：{len(anchors)}")
+
+            sample = (res2.get("items") or res.get("items") or [])[:2]
+            if sample:
+                print(f"[probe] 样例（截断）：{json.dumps(sample, ensure_ascii=False)[:600]}")
+
+            if save_html:
+                print(f"[probe] 现场已保存：{_dump_search_page(page)}")
+            print("[probe] 完成。若 SSR 条数 > 0 且字段 keys 正常，可开始采集；否则把输出与 data/debug 下的文件发开发者。")
+        finally:
+            close_context(ctx)

@@ -13,7 +13,6 @@ from bkr import db as dbm
 from bkr.auth import effective_authorized
 from bkr.browser import CDP_URL, browser_channel, engine_name
 from bkr.config import profile_dir_for
-from bkr.providers import pdd_ddk
 
 from ..jobs import BusyError, manager
 
@@ -62,7 +61,6 @@ def env():
     return {
         "logged_in": status("tmall"),
         "busy": busy,
-        "pdd_api": pdd_ddk.configured(),
         "profiles": {
             "tmall": status("tmall"),
             "1688": status("1688"),

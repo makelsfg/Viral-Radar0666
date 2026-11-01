@@ -52,6 +52,8 @@
 > v0.14.0（2026-11-01）：拼多多网页 H5 触发安全验证滑块，自动化不可稳定通过且不应绕过验证。**拼多多改为官方开放平台（多多进宝）API**：新增 `bkr/providers/pdd_ddk.py`（签名、商品搜索、详情），不启动浏览器、无验证码；配置 `pdd.client_id/client_secret/pid` 后生效，未配置时拼多多不进入登录/采集流程。API 返回标题/拼团价/已拼数量/店铺/主图，详情仅基础字段（无 SKU/参数）。
 >
 > v0.15.0（2026-11-01）：新增**「大佬分析」双 Agent 报告模块**。输入支持多批次、上传 `.md/.txt` 报告、手动笔记；先构建带 `[E#]` 编号的 Evidence Pack，再由电商大佬 Agent 写稿、审查 Agent 按五维评分输出 `pass/revise + issues`，不通过自动重写，最多 3 轮，未通过标记 `needs_human`。技术栈 LangChain tools + LangGraph StateGraph；新增 `bkr/expert/`、`/api/expert/runs`、SQLite `expert_run/expert_round`、SSE 时间线与前端页签；两个 Agent 可分别配置模型（`expert.writer/reviewer`）。
+>
+> v0.16.0（2026-11-01）：拼多多改回网页 H5 采集并删除官方开放平台（多多进宝）通道。原因：DDK 商品池仅覆盖可推广商品，无法覆盖各卖家全量商品，不满足爆款识别的候选面。① 重写 `bkr/platforms/pinduoduo.py`：搜索列表优先读已渲染 SSR 数据（`window.rawData.stores.store.data.ssrListData.list`，字段首跑经 `pdd-probe` 校准），失败退回 `goods.html` 锚点兜底并告警；详情页零宽字符清洗、遮挡价（`¥3.?`）判缺失、单品「已拼」与「本店已拼」分离（后者只进 `params[店铺已拼]`）、评价数/发货地/服务标签解析、App 降级页识别（`PddDegradedError`，遇滑块/登录/访问异常即停不重试）；② 硬约束：搜索无限滚动固定 1 屏/批；单批详情 ≤10（`settings.pdd.detail_batch` 可调低，超出暂停 `paused_captcha` 等冷却续采）；一次只开一个详情页；③ 新增实机校准命令 `python -m bkr.cli pdd-probe`（打印 SSR keys/条数/样例，不写库）；④ 删除 `bkr/providers/pdd_ddk.py` 与 collector 的 `_run_pdd_api` 分支；auth 恢复按登录 cookie 判定（保留 0.12.1 修复）；采集页拼多多启用并改为浏览器登录，顶部改为「登录拼多多」按钮。
 
 ---
 

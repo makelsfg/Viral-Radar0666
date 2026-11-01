@@ -1,6 +1,6 @@
 # 爆款雷达 · 交接说明（HANDOFF）
 
-> 当前版本：**0.15.0**（2026-11-01）
+> 当前版本：**0.16.0**（2026-11-01）
 > 项目目录：`E:\agent_培训代码库\爆款分析\baokuan-radar`
 > 新会话请先读本文件 + 项目记忆 `project_baokuan_radar.md`，再继续。
 
@@ -17,7 +17,7 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - 前端：React + TypeScript + Vite + Ant Design 5（`web/`）
 - 后端：FastAPI（`server/`）+ Playwright/patchright（`bkr/`）+ SQLite（`data/radar.db`）
 - 配置：`config/settings.yaml`（浏览器 channel=msedge，engine=auto；当前自动使用 **patchright**；detail.provider=local；LLM key 已配置）
-- 版本探针：`GET /api/health` → 应显示 `0.15.0`、`engine=patchright`、`channel=msedge`
+- 版本探针：`GET /api/health` → 应显示 `0.16.0`、`engine=patchright`、`channel=msedge`
 - 前端五个页签：采集 / 数据 / 分析 / 大佬分析 / 热词
 
 ## 当前流程
@@ -37,6 +37,14 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 - 每平台仅保留一个工作标签页（列表/详情复用；详情弹窗临时关闭），移除 keep-alive/乱码标签
 - 1688 销量解析兼容"成交 N 笔 / 已售 N 个 / N万+"；详情已售/加购回填快照，数据页可显示并按已售排序
+
+## 最近变更（0.16.0）
+
+- **拼多多改回网页 H5 采集，删除官方开放平台（多多进宝）API 通道**（`pdd_ddk.py` 已删）
+- 重写 `bkr/platforms/pinduoduo.py`：搜索优先读已渲染 SSR（`window.rawData…ssrListData.list`），失败退回锚点兜底并告警；详情零宽清洗、遮挡价判缺失、单品已拼与「本店已拼」分离、评价数/发货地/服务解析、App 降级页识别
+- 硬约束：搜索无限滚动固定 1 屏；单批详情 ≤10（`settings.pdd.detail_batch` 可调低），超出暂停 `paused_captcha` 冷却续采；遇滑块/登录/访问异常/降级立即停批，不重试不绕过
+- 新增实机校准命令：`python -m bkr.cli pdd-probe --keyword 手表`（打印 SSR keys/条数/滚动前后对比/样例，不写库，现场存 `data/debug/`）
+- auth 恢复拼多多登录 cookie 判定（保留 0.12.1 关窗复核修复）；采集页拼多多启用，顶部改为「登录拼多多」按钮
 
 ## 最近变更（0.15.0）
 
@@ -86,13 +94,15 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 ## 已知限制 / 待验证
 
-- **拼多多**：H5 依赖登录态与移动端布局，可能需要多轮选择器校准；若持续 0 解析或跳登录页，先看 `data/logs/{batch}_pdd.log` 与 `data/debug/`
+- **拼多多**：H5 依赖登录态与移动端布局；SSR 路径/字段、详情选择器仍需实机确认（先跑 `python -m bkr.cli pdd-probe`）。若解析 0 条或跳登录页，先看 `data/logs/{batch}_pdd.log` 与 `data/debug/`
+- **拼多多节奏**：单批 ≤10 详情；与天猫/1688 并行 worker 时同机双 Edge 同时活动，滑块概率理论上更高，建议先单独跑 pdd 批次观察 2–3 批
 - **排序**：天猫/1688/拼多多均改为页面点击“销量”，日志 `[排序]` 与 `[校验]` 用于核对；若平台改版导致点击失效，会在日志中告警并退化为本地按已售下限排序
 - **报告口径**：三个平台“已售/成交/已拼”统计口径不同；合并报告只按平台分组，不做跨平台销量排名
 
 ## 后续待办
 
-- 1688 / 拼多多选择器实测校准（失败时 `data/debug` 保存现场）
+- 拼多多实机校准：先 `pdd-probe`，首跑确认 SSR 字段/条数与详情解析（失败时 `data/debug` 保存现场）
+- 1688 详情选择器与排序页签实测复核（失败时 `data/debug` 保存现场）
 - 跨批次趋势 / 命中率回测（数据积累后进行）
 - 节奏预设 safe/balanced/fast 已可用（默认 safe，采集页选择）
 
@@ -101,7 +111,7 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - `bkr/browser.py`：引擎选择（patchright/rebrowser/playwright）、launch/close、keep-alive、wait_for_login、风控检测；platform=pdd 时移动端 UA/视口
 - `bkr/collector.py`：列表→详情编排、价格护栏、异常入库
 - `bkr/platforms/alibaba.py`：1688 搜索/详情适配（关键词 GBK 编码）
-- `bkr/platforms/pinduoduo.py`：拼多多 H5 适配（实验版）
+- `bkr/platforms/pinduoduo.py`：拼多多 H5 适配（SSR 列表/详情解析/降级与滑块识别；`probe()` 实机校准）
 - `bkr/sort_ui.py`：页面排序点击/选中态校验（天猫销量、1688 销量/成交额、拼多多销量）
 - `server/routes/data.py`：`/api/report` 合并报告、`/api/report/meta`、导出命名
 - `bkr/expert/`：大佬分析（evidence/tools/prompts/graph/store/service）；`server/routes/expert.py`；`web/src/panels/ExpertPanel.tsx`
@@ -112,5 +122,5 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 ## Git
 
-- 最近提交：`0.8.4`（本文件生成后如未提交，请先 `git add -A && git commit`）
+- 最近提交：`0.16.0`（本文件生成后如未提交，请先 `git add -A && git commit`）
 - 数据/日志/浏览器 profile 均已在 `.gitignore` 中
