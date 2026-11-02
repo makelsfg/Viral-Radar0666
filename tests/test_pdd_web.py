@@ -145,6 +145,21 @@ def test_rate_limit_page_is_not_slider():
     assert "冷却" in str(exc.value)
 
 
+def test_rate_limit_response_matcher():
+    assert pdd._is_rate_limit_response(
+        429, "https://mobile.yangkeduo.com/proxy/api/search?pdduid=1"
+    )
+    assert not pdd._is_rate_limit_response(
+        200, "https://mobile.yangkeduo.com/proxy/api/search?pdduid=1"
+    )
+    assert not pdd._is_rate_limit_response(
+        429, "https://mobile.yangkeduo.com/proxy/api/search_hotquery?pdduid=1"
+    )
+    assert not pdd._is_rate_limit_response(
+        429, "https://mobile.yangkeduo.com/proxy/api/xg/pfb/a3"
+    )
+
+
 def test_empty_detail_is_not_written():
     """详情页解析不到任何字段时应暂停，而不是写一条 is_detail=1 的空记录。"""
     class _DetailPage(_Page):

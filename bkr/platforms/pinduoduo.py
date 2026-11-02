@@ -507,6 +507,43 @@ def _is_slider_page(url, title, text) -> bool:
     )
 
 
+def _is_rate_limit_response(status: int, url: str) -> bool:
+    path = str(url or "").split("?", 1)[0].rstrip("/")
+    return int(status or 0) == 429 and path.endswith("/proxy/api/search")
+
+
+def _rate_limit_error() -> BlockedError:
+    return BlockedError(
+        "拼多多搜索接口返回 429（页面显示「系统繁忙/请稍后再试」）：账号或会话被限流，"
+        "请冷却 24–48 小时后再试，不要连续重试"
+    )
+
+
+def _watch_rate_limit(page) -> dict:
+    """监听页面自身的搜索请求；429 时置位，供搜索/详情流程早停，避免继续重载。"""
+    flag = getattr(page, "_bkr_pdd_rate_flag", None)
+    if flag is not None:
+        return flag
+    flag = {"hit": False}
+    try:
+        page._bkr_pdd_rate_flag = flag
+
+        def _on_resp(resp):
+            try:
+                url = resp.url or ""
+                if resp.status >= 400 and "/proxy/api/" in url:
+                    print(f"    [网络] HTTP {resp.status} {url[:160]}")
+                if _is_rate_limit_response(resp.status, url):
+                    flag["hit"] = True
+            except Exception:
+                pass
+
+        page.on("response", _on_resp)
+    except Exception:
+        pass
+    return flag
+
+
 def check_pdd_blocked(page) -> None:
     """拼多多专属检查：滑块 / 登录页 / 访问异常（不改变天猫/1688 的判定）。"""
     url = (page.url or "").lower()
@@ -731,6 +768,7 @@ def _wait_content(page, timeout_ms: int = 20000) -> str:
 def open_search_page(ctx, task, pageno: int):
     """拼多多 H5 为无限滚动：固定单屏采集，第 N 页参数被忽略并告警。"""
     page = get_work_page(ctx)
+    rate_flag = _watch_rate_limit(page)
     url = search_url(task, 1)
     if pageno > 1 and not getattr(page, "_bkr_pdd_no_page_warn", False):
         print("  [警告] 拼多多搜索为无限滚动，本批固定采 1 屏（搜索页数参数被忽略）")
@@ -742,7 +780,11 @@ def open_search_page(ctx, task, pageno: int):
     if not same_search_url(page.url or "", url):
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(random.randint(*PAGE_SETTLE_MS))
+        if rate_flag.get("hit"):
+            raise _rate_limit_error()
         mode = _wait_content(page)
+        if rate_flag.get("hit"):
+            raise _rate_limit_error()
         if mode == "none":
             print("  [警告] 页面 20 秒内未完成渲染（rawData/商品链接均未出现），继续尝试兜底解析")
         else:
@@ -806,7 +848,10 @@ def _read_ssr(page) -> dict:
             res = {"ok": False, "why": f"{type(exc).__name__}: {exc}"}
         if res.get("ok") and (res.get("items") or []):
             break
-        page.wait_for_timeout(1200)
+        try:
+            page.wait_for_timeout(1200)
+        except Exception:
+            break  # 窗口被人工关闭：停止重试，把已读结果交回上层
     return res
 
 
@@ -1051,18 +1096,28 @@ def probe(keyword: str = "手表", save_html: bool = True) -> None:
             except Exception:
                 pass
             page = ctx.new_page()
-            def _on_resp(resp):
-                try:
-                    if resp.status >= 400 and ("/proxy/api/" in resp.url or "search" in resp.url):
-                        print(f"[probe][网络] HTTP {resp.status} {resp.url[:180]}")
-                except Exception:
-                    pass
-            page.on("response", _on_resp)
+            rate_flag = _watch_rate_limit(page)
             url = SEARCH_URL.format(q=quote(keyword))
             print(f"[probe] 打开：{url}")
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(random.randint(*PAGE_SETTLE_MS))
+            if rate_flag.get("hit"):
+                print(
+                    "[probe] 搜索接口 429：账号/会话被限流，本次 probe 提前结束；"
+                    "请冷却 24–48 小时后再试，不要连续重试"
+                )
+                if save_html:
+                    print(f"[probe] 现场已保存：{_dump_search_page(page)}")
+                return
             mode = _wait_content(page)
+            if rate_flag.get("hit"):
+                print(
+                    "[probe] 搜索接口 429：账号/会话被限流，本次 probe 提前结束；"
+                    "请冷却 24–48 小时后再试，不要连续重试"
+                )
+                if save_html:
+                    print(f"[probe] 现场已保存：{_dump_search_page(page)}")
+                return
             print(f"[probe] 渲染就绪：{mode}（空壳页会等待最多 20 秒）")
             try:
                 check_pdd_blocked(page)
