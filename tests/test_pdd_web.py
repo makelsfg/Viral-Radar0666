@@ -135,6 +135,16 @@ def test_slider_page_detected_by_title_only():
     pdd.check_pdd_blocked(_Page())  # 正常商品页不误报
 
 
+def test_rate_limit_page_is_not_slider():
+    """实测：搜索接口 429 时页面只显示「系统繁忙/请稍后再试」，不能当滑块等人工。"""
+    page = _Page(title="拼多多", text="​手表 商品 系统繁忙 请稍后再试 刷新")
+    assert pdd._is_slider_page(page.url, pdd._page_title(page), page._text) is False
+    with pytest.raises(BlockedError) as exc:
+        pdd.check_pdd_blocked(page)
+    assert "429" in str(exc.value)
+    assert "冷却" in str(exc.value)
+
+
 def test_empty_detail_is_not_written():
     """详情页解析不到任何字段时应暂停，而不是写一条 is_detail=1 的空记录。"""
     class _DetailPage(_Page):

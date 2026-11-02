@@ -302,6 +302,7 @@ _SLIDER_MARKERS = (
 # body.innerText 可能没有任何 _SLIDER_MARKERS（实测详情页因此被当成正常页解析成空记录）。
 _SLIDER_TITLE_MARKERS = ("安全验证", "滑块验证")
 _LOGIN_MARKERS = ("手机号登录", "扫码登录", "验证码登录", "请登录后查看")
+_RATE_LIMIT_MARKERS = ("系统繁忙", "请稍后再试")
 _ACCESS_MARKERS = ("访问异常", "系统繁忙", "访问受限")
 
 
@@ -521,6 +522,11 @@ def check_pdd_blocked(page) -> None:
         )
     if _is_slider_page(url, title, head):
         raise BlockedError("拼多多出现滑块验证，请人工在浏览器完成验证后执行 --resume 续采")
+    if any(m in head for m in _RATE_LIMIT_MARKERS):
+        raise BlockedError(
+            "拼多多返回「系统繁忙/请稍后再试」（浏览器网络面板显示 search 接口 429）："
+            "账号或会话被限流，请冷却 24–48 小时后再试，不要连续重试"
+        )
     if any(m in head for m in _ACCESS_MARKERS):
         raise BlockedError("拼多多返回访问异常/系统繁忙，请人工确认恢复并冷却一段时间后再续采")
 
@@ -1045,6 +1051,13 @@ def probe(keyword: str = "手表", save_html: bool = True) -> None:
             except Exception:
                 pass
             page = ctx.new_page()
+            def _on_resp(resp):
+                try:
+                    if resp.status >= 400 and ("/proxy/api/" in resp.url or "search" in resp.url):
+                        print(f"[probe][网络] HTTP {resp.status} {resp.url[:180]}")
+                except Exception:
+                    pass
+            page.on("response", _on_resp)
             url = SEARCH_URL.format(q=quote(keyword))
             print(f"[probe] 打开：{url}")
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -1059,7 +1072,20 @@ def probe(keyword: str = "手表", save_html: bool = True) -> None:
                     print(f"[probe] 现场已保存：{_dump_search_page(page)}")
                 return
             except BlockedError as e:
-                print(f"[probe] 命中风控/滑块：{e}")
+                try:
+                    head = _clean(page.inner_text("body", timeout=2000))[:2500]
+                except Exception:
+                    head = ""
+                if not _is_slider_page(page.url, _page_title(page), head):
+                    print(f"[probe] 命中风控/限流（非滑块）：{e}")
+                    print(
+                        "[probe] 未进入人工等待。若是「系统繁忙/请稍后再试」，"
+                        "说明账号或会话被搜索接口限流（429），请冷却 24–48 小时后再试，不要连续重试"
+                    )
+                    if save_html:
+                        print(f"[probe] 现场已保存：{_dump_search_page(page)}")
+                    return
+                print(f"[probe] 命中滑块：{e}")
                 if not wait_human_slide(page):
                     if save_html:
                         print(f"[probe] 现场已保存：{_dump_search_page(page)}")

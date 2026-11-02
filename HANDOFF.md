@@ -1,6 +1,6 @@
 # 爆款雷达 · 交接说明（HANDOFF）
 
-> 当前版本：**0.17.5**（2026-11-02）
+> 当前版本：**0.17.6**（2026-11-02）
 > 项目目录：`E:\agent_培训代码库\爆款分析\baokuan-radar`
 > 新会话请先读本文件 + 项目记忆 `project_baokuan_radar.md`，再继续。
 
@@ -17,7 +17,7 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - 前端：React + TypeScript + Vite + Ant Design 5（`web/`）
 - 后端：FastAPI（`server/`）+ Playwright/patchright（`bkr/`）+ SQLite（`data/radar.db`）
 - 配置：`config/settings.yaml`（浏览器 channel=msedge，engine=auto；当前自动使用 **patchright**；detail.provider=local；LLM key 已配置）
-- 版本探针：`GET /api/health` → 应显示 `0.17.5`、`engine=patchright`、`channel=msedge`
+- 版本探针：`GET /api/health` → 应显示 `0.17.6`、`engine=patchright`、`channel=msedge`
 - 前端五个页签：采集 / 数据 / 分析 / 大佬分析 / 热词
 
 ## 当前流程
@@ -37,6 +37,13 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 - 每平台仅保留一个工作标签页（列表/详情复用；详情弹窗临时关闭），移除 keep-alive/乱码标签
 - 1688 销量解析兼容"成交 N 笔 / 已售 N 个 / N万+"；详情已售/加购回填快照，数据页可显示并按已售排序
+
+## 最近变更（0.17.6）
+
+- **拼多多搜索接口 429 诊断（2026-11-02 15:30）**：登录后脚本 profile 的搜索页显示「系统繁忙/请稍后再试」。只读抓包（观察页面自身请求，不调用/不逆向接口）确认：文档 200、CSS/JS 正常，`https://mobile.yangkeduo.com/proxy/api/search?pdduid=...` 返回 **429**；同一台机器人工普通 Edge 会话可正常搜索。结论：平台对**脚本会话**的搜索接口限流，不是选择器/登录态/UA 问题，不能绕过
+- **probe 修正**：只对真正的滑块页进入 `wait_human`；429/系统繁忙单独提示「冷却 24–48 小时、不要连续重试」，不再误报「滑块已通过」；probe 增加页面自身 4xx 响应日志（只看不调）
+- **实机状态**：当天不再重试；CSR fiber 仍未验证。等冷却后先确认人工浏览器正常，再跑一次 probe
+- 单测 89 通过；后端需重启后 health 显示 0.17.6
 
 ## 最近变更（0.17.5）
 
@@ -167,18 +174,18 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 ## 已知限制 / 待验证（2026-11-02）
 
-- **拼多多（最关键）**：当前账号/会话被平台固定下发**客户端渲染（CSR）页**——无 `window.rawData`、无内联 SSR、DOM 里也没有 `goods_id`。已实现 `extract_dom_react()`（从 React fiber props 恢复货号/标题/价格/图片，顺序=渲染顺序），**尚未实机验证**；`pdd-probe` 会在 SSR 不可用时打印“React props 提取：N 条”。2026-11-02 实测 pdd profile 未登录（页面标题「登录」），需先人工登录；11-01 16:53 的两个详情为空已定位为「安全验证」滑块页未被识别（0.17.5 已修）
-- **拼多多登录**：只认 `PDDAccessToken`，且登录窗口采用基线对比（相对打开登录页时新出现/已刷新的 token 才算真实登录）；匿名 `pdd_user_id` 不再误判。2026-11-02 profile 内 token 已失效/被清除，需重新登录
+- **拼多多（最关键）**：当前账号/会话被平台固定下发**客户端渲染（CSR）页**——无 `window.rawData`、无内联 SSR、DOM 里也没有 `goods_id`。已实现 `extract_dom_react()`（从 React fiber props 恢复货号/标题/价格/图片，顺序=渲染顺序），**尚未实机验证**；`pdd-probe` 会在 SSR 不可用时打印“React props 提取：N 条”。2026-11-02 15:30 重新登录后 probe 命中搜索接口 **429**（页面显示「系统繁忙」），CSR fiber 仍未能验证；11-01 16:53 的两个详情为空已定位为「安全验证」滑块页未被识别（0.17.5 已修）
+- **拼多多登录**：只认 `PDDAccessToken`，且登录窗口采用基线对比（相对打开登录页时新出现/已刷新的 token 才算真实登录）；匿名 `pdd_user_id` 不再误判。2026-11-02 14:57 已重新登录成功（token 有效期至 2027-02），但脚本会话的搜索接口仍被 429 限流
 - **拼多多滑块**：检测到即人工接管（窗口前置 + CDP 鼠标转触摸，≤3 分钟，通过自动继续）；超时才暂停批次。0.17.5 起同时按 `<title>安全验证</title>` 识别，覆盖 body 无滑块文案的情况
 - **拼多多排序**：0.17.5 把 `ensure_sort` 视口上限放到 900、找不到时重试一次并打印「销量」节点坐标；仍待登录后实机确认是时序还是位置问题。fiber 顺序即页面渲染顺序
-- **账号风险**：11-01 已因高频验证被拼多多降权（搜索页直接弹滑块），验证务必低频（当天 ≤1 批小样本）
+- **账号风险**：11-01 已因高频验证被拼多多降权；2026-11-02 脚本会话搜索接口 429（人工普通 Edge 会话正常），按平台限流处理：**冷却 24–48 小时，当天不要再 probe/采集**。验证务必低频（当天 ≤1 批小样本）
 - **大佬分析**：v0.17.5 修复修订死循环；2026-11-02 首轮重跑确认五节结构、截断续写、修订逐条落实，但仍 `needs_human`（best 第 2 轮 82 分）；重跑同时暴露 0 价口径问题（已修）。**第二次重跑因 LLM API 欠费（aliyun overdue-payment）中断**，充值后才能继续验证；同一模型并发建议 ≤2 个任务
 - **排序（天猫/1688）**：页面点击“销量”，日志 `[排序]`/`[校验]` 核对；失效会告警并退化为本地已售排序
 - **报告口径**：三平台“已售/成交/已拼”不同口径，合并报告只按平台分组，不做跨平台销量排名
 
 ## 后续待办
 
-1. **拼多多 CSR 链路实机验证**：先人工登录 pdd profile → `pdd-probe --keyword 手表` 看 fiber 条数与排序诊断 → 小批采集（1 屏 + 3 详情）→ 核对 `data/raw/{batch}/pdd/` 的详情 JSON 标题/单品已拼/价格遮挡（0.17.5 起空详情会暂停而不是写空记录）
+1. **拼多多 CSR 链路实机验证**（先冷却 24–48h；当天已命中 429，不要再 probe）：确认人工普通 Edge 能正常搜索 → 跑一次 `pdd-probe --keyword 手表` 看 fiber 条数/排序诊断/4xx 日志 → 小批采集（1 屏 + 3 详情）→ 核对 `data/raw/{batch}/pdd/` 的详情 JSON 标题/单品已拼/价格遮挡（0.17.5 起空详情会暂停而不是写空记录）
 2. 拼多多 CSR 下的销量排序校准：看 0.17.5 新增的「销量」节点坐标诊断；点击后用 fiber 顺序核对是否销量降序，必要时改 URL `sort_type`
 3. 采集监督 Agent P2：SSE/前端时间线、详情阶段接管、天猫/1688 接入；用 `agent_run` 统计自愈率并调整规则表
 4. 大佬分析：五节结构、截断续写、修订落实已在 2026-11-02 首轮重跑确认；内容质量（证据/逻辑得分 <85）与 0 价口径已修，待 LLM 充值后再重跑验证通过线
@@ -201,5 +208,5 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 ## Git
 
-- 最近提交：`v0.17.5`（本文件随代码一起提交）
+- 最近提交：`v0.17.6`（本文件随代码一起提交）
 - 数据/日志/浏览器 profile 均已在 `.gitignore` 中
