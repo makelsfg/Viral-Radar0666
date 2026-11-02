@@ -266,7 +266,7 @@ def _reviewer(state: ExpertState) -> dict:
             "severity": "major",
             "location": "整体",
             "problem": "未达到通过硬条件（分数/证据/可执行性）",
-            "fix": "补齐证据引用，强化行动方案后重新提交",
+            "fix": "补齐证据引用，并把结论明确为做/不做/为什么后重新提交",
             "evidence_ids": [],
         })
     return review

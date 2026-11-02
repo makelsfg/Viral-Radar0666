@@ -161,7 +161,7 @@ class ToolBox:
     def _tool_click_sort(self, args: dict) -> dict:
         label = str(args.get("label") or "销量")
         self._url_before_sort = self.page.url or ""
-        used = pdd.ensure_sort(self.page, (label, "销量排序"))
+        used = pdd.ensure_sort(self.page, (label, "销量排序"), max_y=900)
         self.page.wait_for_timeout(1800)
         url_changed = (self.page.url or "") != self._url_before_sort
         dom_n = 0

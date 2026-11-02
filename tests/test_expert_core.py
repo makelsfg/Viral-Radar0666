@@ -60,6 +60,25 @@ def test_build_evidence_and_search(monkeypatch):
     assert "[E1]" in text
 
 
+def test_batch_rows_treats_zero_price_as_missing(monkeypatch):
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, "z.db")
+    conn = db.connect(path)
+    db.upsert_snapshot(
+        conn, "t1", "zero", "b1", "2026-11-01T10:00:00", 1,
+        "¥0.00", None, None, None, None,
+        title="零价占位", image_url="", shop_name="", page_no=1, platform="1688",
+    )
+    conn.commit()
+    conn.close()
+
+    orig = db.connect
+    monkeypatch.setattr(ev.db, "connect", lambda p=None: orig(p or path))
+    rows = ev.batch_rows("t1", "b1")
+    assert rows[0]["price_final"] is None
+    assert rows[0]["price_source"] is None
+
+
 def test_expert_tools_calculate_and_checks():
     assert tools.calculate("(199-80)*1000")["result"] == 119000
     assert "error" in tools.calculate("__import__('os').system('x')")

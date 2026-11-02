@@ -50,8 +50,13 @@ def read_ssr_items(page) -> list:
 def classify(signals: dict, ssr_count: int) -> str:
     """把信号映射为状态（顺序即优先级），全部规则可单测。"""
     url = str(signals.get("url") or "").lower()
+    title = str(signals.get("title") or "")
     head = str(signals.get("head") or "")
-    if "captcha" in url or any(m in head for m in pdd._SLIDER_MARKERS):
+    if (
+        "captcha" in url
+        or any(m in head for m in pdd._SLIDER_MARKERS)
+        or any(m in title for m in pdd._SLIDER_TITLE_MARKERS)
+    ):
         return "slider"
     if "login.html" in url or any(m in head for m in pdd._LOGIN_MARKERS):
         return "login_wall"

@@ -3,7 +3,14 @@ import os
 import tempfile
 
 from bkr import db
-from bkr.collector import _same_search_url
+from bkr.collector import _price_guard, _same_search_url
+
+
+def test_price_guard_treats_zero_as_missing():
+    assert _price_guard(0, 20) == 20
+    assert _price_guard(0, 0) is None
+    assert _price_guard(None, 0) is None
+    assert _price_guard(0, None) is None
 
 
 def test_same_search_url_tmall():

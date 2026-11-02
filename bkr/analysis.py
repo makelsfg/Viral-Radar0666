@@ -74,6 +74,8 @@ def price_bands(rows: list[dict]) -> list[dict]:
             if price is None:
                 continue
             p = float(price)
+            if p <= 0:  # 列表价缺失会被上游写成 0，不能算作 <¥50 的真实价格
+                continue
             if p >= lo and (hi is None or p < hi):
                 count += 1
                 sold += int(r.get("sold_lb") or 0)

@@ -298,6 +298,9 @@ _SLIDER_MARKERS = (
     "请拖动下方滑块", "拖动滑块完成验证", "滑动验证", "完成安全验证",
     "拼多多安全验证", "拖动滑块", "完成上方拼图",
 )
+# 滑块页的 <title> 固定为“安全验证”，但验证组件文字常常只在脚本里，
+# body.innerText 可能没有任何 _SLIDER_MARKERS（实测详情页因此被当成正常页解析成空记录）。
+_SLIDER_TITLE_MARKERS = ("安全验证", "滑块验证")
 _LOGIN_MARKERS = ("手机号登录", "扫码登录", "验证码登录", "请登录后查看")
 _ACCESS_MARKERS = ("访问异常", "系统繁忙", "访问受限")
 
@@ -488,9 +491,25 @@ def normalize_card(raw: dict, task) -> dict | None:
 # ———————————————————— 风控 / 登录 / 降级检查 ————————————————————
 
 
+def _page_title(page) -> str:
+    try:
+        return _clean(page.title())[:200]
+    except Exception:
+        return ""
+
+
+def _is_slider_page(url, title, text) -> bool:
+    return (
+        "captcha" in str(url or "").lower()
+        or any(m in str(text or "") for m in _SLIDER_MARKERS)
+        or any(m in str(title or "") for m in _SLIDER_TITLE_MARKERS)
+    )
+
+
 def check_pdd_blocked(page) -> None:
     """拼多多专属检查：滑块 / 登录页 / 访问异常（不改变天猫/1688 的判定）。"""
     url = (page.url or "").lower()
+    title = _page_title(page)
     try:
         head = _clean(page.inner_text("body", timeout=3000))[:3000]
     except Exception:
@@ -500,7 +519,7 @@ def check_pdd_blocked(page) -> None:
             "拼多多未登录或登录态失效：请点右上角「登录拼多多」完成手机号验证码登录"
             "（或终端 bkr login --site pdd），登录成功后再点「继续采集」"
         )
-    if "captcha" in url or any(m in head for m in _SLIDER_MARKERS):
+    if _is_slider_page(url, title, head):
         raise BlockedError("拼多多出现滑块验证，请人工在浏览器完成验证后执行 --resume 续采")
     if any(m in head for m in _ACCESS_MARKERS):
         raise BlockedError("拼多多返回访问异常/系统繁忙，请人工确认恢复并冷却一段时间后再续采")
@@ -548,14 +567,39 @@ def _reorder_items_by_images(items: list[dict], dom_urls: list[str]):
     return ordered + rest, matched
 
 
+def _sort_label_diag(page) -> list[dict]:
+    """排序项排查：返回 DOM 中精确文本“销量”节点的位置（不点击）。"""
+    js = """
+    () => Array.from(document.querySelectorAll('div,span,a,button,li'))
+      .filter((e) => (e.textContent || '').trim() === '销量')
+      .map((e) => {
+        const r = e.getBoundingClientRect();
+        return {tag: e.tagName, x: Math.round(r.x), y: Math.round(r.y),
+                w: Math.round(r.width), h: Math.round(r.height)};
+      })
+    """
+    try:
+        return page.evaluate(js) or []
+    except Exception:
+        return []
+
+
 def _try_sales_sort(page, original_url: str) -> str:
     """点击“销量”后尽力获取销量序。返回 url=重开排序页 / dom=按图序重排 / none=保持综合序。"""
-    try:
-        label = ensure_sort(page, ("销量", "销量排序"))
-    except Exception as exc:
-        print(f"    [排序][警告] 点击“销量”失败：{exc}")
-        return "none"
+    label = None
+    for attempt in range(2):
+        try:
+            label = ensure_sort(page, ("销量", "销量排序"), max_y=900)
+        except Exception as exc:
+            print(f"    [排序][警告] 点击“销量”失败：{exc}")
+            return "none"
+        if label:
+            break
+        if attempt == 0:
+            print("    [排序] 首次未找到“销量”，等待布局稳定后重试")
+            page.wait_for_timeout(2000)
     if not label:
+        print(f"    [排序][诊断] DOM 中“销量”节点：{_sort_label_diag(page)[:5]}")
         print("    [排序][警告] 未找到“销量”排序项，保持综合顺序")
         return "none"
     page.wait_for_timeout(random.randint(1500, 2200))
@@ -607,9 +651,10 @@ def wait_human_slide(page, timeout: int = 180) -> bool:
         try:
             head = _clean(page.inner_text("body", timeout=2000))[:2500]
             cur_url = (page.url or "").lower()
+            title = _page_title(page)
         except Exception:
             return False
-        if "captcha" in cur_url or any(m in head for m in _SLIDER_MARKERS):
+        if _is_slider_page(cur_url, title, head):
             continue
         print("  [人工接管] 滑块已通过，继续采集")
         return True
@@ -629,8 +674,7 @@ def _check_or_wait_human(page) -> None:
             head = _clean(page.inner_text("body", timeout=2000))[:2500]
         except Exception:
             pass
-        is_slide = any(m in head for m in _SLIDER_MARKERS) or "captcha" in (page.url or "").lower()
-        if not is_slide:
+        if not _is_slider_page(page.url, _page_title(page), head):
             raise
         if not wait_human_slide(page):
             raise
@@ -925,6 +969,12 @@ def extract_from_page(page, item_id: str, save_html: bool = False) -> dict:
     shop_name = parse_pdd_shop(region)
     params = dict(data.get("attrs") or {})
     params.update(parse_pdd_params(region))
+    if not title and price is None and not sold_text and not shop_name and not params:
+        # 实测滑块页 body 可能仍有少量文本，若不拦截会写出 is_detail=1 的空记录。
+        raise BlockedError(
+            "拼多多详情页未解析到任何字段（可能滑块/登录/改版），已暂停，不写空记录；"
+            "请人工确认后冷却一段时间再续采"
+        )
     params["价格口径"] = caliber
 
     has_eval = bool(_EVAL_COUNT_RE.search(region))

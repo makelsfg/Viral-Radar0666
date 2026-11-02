@@ -23,6 +23,15 @@ def _loads(value, default):
         return default
 
 
+def _positive(value) -> float | None:
+    """价格护栏：None/0/非法值都视为缺失（上游会把缺失列表价写成 0）。"""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
 def batch_rows(task_id: str, batch: str) -> list[dict]:
     """读取一个批次的商品行（价格/销量/标题/店铺/参数），复用分析口径。"""
     conn = db.connect()
@@ -45,10 +54,10 @@ def batch_rows(task_id: str, batch: str) -> list[dict]:
 
     out = []
     for r in rows:
-        price = r["price_final"]
+        price = _positive(r["price_final"])
         source = "detail"
         if price is None:
-            price = parse_price(r["price_text"] or "")
+            price = _positive(parse_price(r["price_text"] or ""))
             source = "list" if price is not None else None
         out.append({
             "item_id": r["item_id"],

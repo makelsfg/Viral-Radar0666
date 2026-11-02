@@ -1,6 +1,22 @@
 """拼多多 H5 网页采集的解析单测（不访问网络/浏览器）。"""
+import pytest
+
 import bkr.auth as auth
+from bkr.browser import BlockedError
 from bkr.platforms import pinduoduo as pdd
+
+
+class _Page:
+    def __init__(self, url="https://mobile.yangkeduo.com/search_result.html", title="拼多多", text="商品 ¥19.9 已拼100件"):
+        self.url = url
+        self._title = title
+        self._text = text
+
+    def title(self):
+        return self._title
+
+    def inner_text(self, *_args, **_kwargs):
+        return self._text
 
 
 class _Task:
@@ -109,6 +125,30 @@ def test_store_level_sales_tip_ignored():
 def test_slider_markers_cover_real_popup():
     assert "拼多多安全验证" in pdd._SLIDER_MARKERS
     assert "完成上方拼图" in pdd._SLIDER_MARKERS
+
+
+def test_slider_page_detected_by_title_only():
+    """实测：滑块页 body.innerText 可能没有滑块文案，只有 <title>安全验证</title>。"""
+    page = _Page(url="https://mobile.yangkeduo.com/goods.html?goods_id=1", title="安全验证", text="")
+    with pytest.raises(BlockedError):
+        pdd.check_pdd_blocked(page)
+    pdd.check_pdd_blocked(_Page())  # 正常商品页不误报
+
+
+def test_empty_detail_is_not_written():
+    """详情页解析不到任何字段时应暂停，而不是写一条 is_detail=1 的空记录。"""
+    class _DetailPage(_Page):
+        mouse = type("M", (), {"wheel": lambda self, *a, **k: None})()
+
+        def wait_for_timeout(self, *_a, **_k):
+            pass
+
+        def evaluate(self, _js):
+            return {"title": "", "top_text": "这是一段没有商品字段的页面文本",
+                    "attrs": {}, "sku_texts": [], "image_url": "", "video_url": ""}
+
+    with pytest.raises(BlockedError):
+        pdd.extract_from_page(_DetailPage(), "1")
 
 
 def test_img_key_and_reorder():

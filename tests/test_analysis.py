@@ -55,6 +55,17 @@ def test_price_bands_sum():
     assert sum(b["sold"] for b in bands) == 10200
 
 
+def test_price_bands_ignore_zero_and_missing():
+    rows = [
+        {"price_final": 0, "sold_lb": 100},   # 上游缺失价写成 0
+        {"price_final": None, "sold_lb": 50},
+        {"price_final": 20.0, "sold_lb": 10},
+    ]
+    bands = price_bands(rows)
+    assert bands[0]["count"] == 1
+    assert bands[0]["sold"] == 10
+
+
 def test_sold_bands():
     bands = {b["label"]: b["count"] for b in sold_bands(ROWS)}
     assert bands["1000–5000"] == 2

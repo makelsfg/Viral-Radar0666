@@ -23,6 +23,7 @@ def _sig(**over):
 
 def test_classify_states():
     assert classify(_sig(head="拼多多安全验证 拖动滑块完成上方拼图"), 0) == "slider"
+    assert classify(_sig(title="安全验证", head="", productTexts=0), 0) == "slider"
     assert classify(_sig(url="https://mobile.yangkeduo.com/login.html"), 0) == "login_wall"
     assert classify(_sig(head="访问异常 系统繁忙"), 0) == "risk_page"
     assert classify(_sig(head="前往APP查看价格"), 0) == "degraded"

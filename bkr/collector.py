@@ -44,7 +44,11 @@ def batch_id(now: datetime | None = None) -> str:
 
 
 def _price_guard(detail_price, list_price):
-    """详情价缺失或与列表价偏离过大时回退列表价。"""
+    """详情价缺失或与列表价偏离过大时回退列表价。0 价视为缺失（上游占位）。"""
+    if detail_price is not None and detail_price <= 0:
+        detail_price = None
+    if list_price is not None and list_price <= 0:
+        list_price = None
     if list_price is None:
         return detail_price
     if detail_price is None:
