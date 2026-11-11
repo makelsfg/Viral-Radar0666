@@ -68,6 +68,18 @@ def _apply_settings_to_env(settings: dict) -> None:
             cap = 10
         os.environ.setdefault("BK_PDD_DETAIL_BATCH", str(max(1, min(cap, 10))))
 
+    database = settings.get("database") or {}
+    if isinstance(database, dict):
+        for key, env in (
+            ("host", "BK_DB_HOST"),
+            ("port", "BK_DB_PORT"),
+            ("user", "BK_DB_USER"),
+            ("password", "BK_DB_PASSWORD"),
+            ("name", "BK_DB_NAME"),
+        ):
+            if database.get(key) not in (None, ""):
+                os.environ.setdefault(env, str(database[key]).strip())
+
     agent = settings.get("agent") or {}
     if isinstance(agent, dict):
         if agent.get("model"):
@@ -115,6 +127,30 @@ PDD_DETAIL_CAP = max(1, min(int(os.environ.get("BK_PDD_DETAIL_BATCH") or 10), 10
 DATA_DIR = Path(os.environ.get("BK_DATA_DIR", ROOT / "data"))
 RAW_DIR = DATA_DIR / "raw"
 DB_PATH = Path(os.environ.get("BK_DB", DATA_DIR / "radar.db"))
+
+
+def _database_config() -> dict | None:
+    """MySQL 连接配置：配置了 BK_DB_HOST / settings.yaml database.host 即启用 MySQL。
+
+    未配置时回退 SQLite（data/radar.db），不影响单机使用与测试。
+    """
+    host = os.environ.get("BK_DB_HOST", "").strip()
+    if not host:
+        return None
+    try:
+        port = int(os.environ.get("BK_DB_PORT", "3306").strip())
+    except ValueError:
+        port = 3306
+    return {
+        "host": host,
+        "port": port,
+        "user": os.environ.get("BK_DB_USER", "root").strip(),
+        "password": os.environ.get("BK_DB_PASSWORD", ""),
+        "name": os.environ.get("BK_DB_NAME", "baokuan_radar").strip(),
+    }
+
+
+DATABASE_CONFIG = _database_config()
 TASKS_DIR = ROOT / "config" / "tasks"
 _PROFILE = os.environ.get("BK_PROFILE", "").strip()
 _CHANNEL = os.environ.get("BK_BROWSER_CHANNEL", "").strip()

@@ -11,21 +11,9 @@ profile 可选：{"features": [...], "materials": [...], "capacity_enabled": boo
 from __future__ import annotations
 
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 
-CAPACITY_ML_RE = re.compile(r"(\d{3,4})\s*(?:ml|ML|毫升)")
-CAPACITY_L_RE = re.compile(r"(\d(?:\.\d)?)\s*(?:L|升)(?![A-Za-z])")
-
-DEFAULT_FEATURES = [
-    "保温", "保冷", "显温", "吸管", "直饮", "大容量", "便携", "刻字", "儿童", "学生",
-    "上学", "户外", "运动", "防风", "防水", "三合一", "加绒", "加厚", "羽绒", "棉服",
-    "冲锋衣", "夹克", "手表", "钢带", "石英", "机械", "智能", "手环", "水杯", "保温杯",
-    "礼盒", "密码锁", "夜光",
-]
-DEFAULT_FUNC_WORDS = [
-    "保温", "保冷", "显温", "吸管", "直饮", "刻字", "大容量", "便携",
-    "防水", "防风", "加绒", "智能",
-]
+_SPLIT_VALUES = re.compile(r"[,，、/;；|]+")
 
 # 固定价格带：跨批次可比，符合用户直觉
 PRICE_BANDS = [
@@ -122,15 +110,16 @@ def shop_concentration(rows: list[dict], top: int = 8) -> dict:
 
 
 def keyword_counts(
-    titles: list[str], top: int = 15, features: list[str] | None = None
+    titles: list[str], features: list[str] | None = None, top: int = 15
 ) -> list[dict]:
-    text = " ".join(t or "" for t in titles)
-    counter = Counter()
-    for word in features or DEFAULT_FEATURES:
-        c = text.count(word)
-        if c:
-            counter[word] = c
-    return [{"word": w, "count": c} for w, c in counter.most_common(top)]
+    """按「命中商品数」统计词表命中（不再用字面出现次数，避免长标题偏差）。"""
+    rows = [{"title": t} for t in titles]
+    stats = selling_point_stats(rows, features=features, param_words=None)
+    return [
+        {"word": it["word"], "count": it["items"], "items": it["items"],
+         "coverage": it["coverage"]}
+        for it in stats["title"][:top]
+    ]
 
 
 def param_profile(rows: list[dict], max_keys: int = 6, max_values: int = 5) -> list[dict]:
@@ -138,7 +127,7 @@ def param_profile(rows: list[dict], max_keys: int = 6, max_values: int = 5) -> l
     if not total:
         return []
     key_counts: Counter = Counter()
-    values: dict[str, Counter] = defaultdict(Counter)
+    values: dict[str, Counter] = {}
     for r in rows:
         params = r.get("params") or {}
         if not isinstance(params, dict):
@@ -147,7 +136,7 @@ def param_profile(rows: list[dict], max_keys: int = 6, max_values: int = 5) -> l
             if not k or v in (None, ""):
                 continue
             key_counts[str(k)] += 1
-            values[str(k)][str(v)] += 1
+            values.setdefault(str(k), Counter())[str(v)] += 1
     threshold = max(1, int(total * 0.4))
     out = []
     for key, count in key_counts.most_common():
@@ -163,98 +152,126 @@ def param_profile(rows: list[dict], max_keys: int = 6, max_values: int = 5) -> l
     return out
 
 
-def _capacity_ml(row: dict) -> int | None:
-    text = (row.get("title") or "") + " " + " ".join(row.get("skus") or [])
-    m = CAPACITY_ML_RE.search(text)
-    if m:
-        return int(m.group(1))
-    m = CAPACITY_L_RE.search(text)
-    if m:
-        return int(float(m.group(1)) * 1000)
-    return None
-
-
-def _capacity_label(ml: int) -> str:
-    if ml < 400:
-        return "≤400ml"
-    if ml < 600:
-        return "400–600ml"
-    if ml < 1000:
-        return "600–1000ml"
-    return "≥1000ml"
-
-
-def _price_band_label(price: float | None) -> str:
-    if price is None:
-        return "价格未知"
-    for label, lo, hi in PRICE_BANDS:
-        if float(price) >= lo and (hi is None or float(price) < hi):
-            return label
-    return "≥¥1000"
-
-
-def _material(row: dict, materials: list[str] | None = None) -> str | None:
-    text = (row.get("title") or "") + " " + " ".join(row.get("skus") or [])
-    if materials:
-        for kw in sorted(materials, key=len, reverse=True):
-            if kw and kw in text:
-                return kw
-    m = re.search(r"(316L?|304)\s*不锈钢", text)
-    if m:
-        return "316不锈钢" if m.group(1).upper().startswith("316") else "304不锈钢"
-    return None
-
-
-def selling_point_clusters(
-    rows: list[dict], top: int = 8, profile: dict | None = None
-) -> list[dict]:
-    profile = profile or {}
-    func_words = profile.get("func_words") or DEFAULT_FUNC_WORDS
-    materials = profile.get("materials") or []
-    capacity_enabled = profile.get("capacity_enabled", True)
-
-    groups: dict[str, dict] = {}
-    for r in rows:
-        title = r.get("title") or ""
-        parts = [_price_band_label(r.get("price_final"))]
-        if capacity_enabled:
-            cap = _capacity_ml(r)
-            if cap:
-                parts.append(_capacity_label(cap))
-        mat = _material(r, materials)
-        if mat:
-            parts.append(mat)
-        funcs = [w for w in func_words if w in title][:2]
-        parts.append("+".join(funcs) if funcs else "基础款")
-        key = " · ".join(parts)
-
-        g = groups.setdefault(key, {
-            "cluster": key, "count": 0, "prices": [], "solds": [], "example": title,
-        })
-        g["count"] += 1
-        if r.get("price_final"):
-            g["prices"].append(float(r["price_final"]))
+def _word_stats(rows: list[dict], word: str, total: int) -> dict:
+    hits = [r for r in rows if word in (r.get("title") or "")]
+    prices, solds = [], []
+    for r in hits:
+        try:
+            price = float(r.get("price_final"))
+        except (TypeError, ValueError):
+            price = 0.0
+        if price > 0:
+            prices.append(price)
         if r.get("sold_lb") is not None:
-            g["solds"].append(int(r["sold_lb"]))
-        if len(title) > len(g["example"]):
-            g["example"] = title
+            solds.append(int(r["sold_lb"]))
+    return {
+        "items": len(hits),
+        "coverage": round(len(hits) / total, 3) if total else 0.0,
+        "avg_price": round(sum(prices) / len(prices), 2) if prices else None,
+        "avg_sold": round(sum(solds) / len(solds), 1) if solds else None,
+        "sold_total": sum(solds) if solds else 0,
+    }
+
+
+def _param_stats(rows: list[dict], total: int, max_pairs: int) -> list[dict]:
+    agg: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        params = r.get("params") or {}
+        if not isinstance(params, dict):
+            continue
+        seen: set[tuple[str, str]] = set()
+        for k, v in params.items():
+            key = str(k or "").strip()
+            if not key or v in (None, ""):
+                continue
+            for part in _SPLIT_VALUES.split(str(v)):
+                value = part.strip()
+                if len(value) < 2 or len(value) > 20:
+                    continue
+                if (key, value) in seen:
+                    continue
+                seen.add((key, value))
+                g = agg.setdefault(
+                    (key, value),
+                    {"key": key, "value": value, "items": 0, "prices": [], "solds": []},
+                )
+                g["items"] += 1
+                try:
+                    price = float(r.get("price_final"))
+                except (TypeError, ValueError):
+                    price = 0.0
+                if price > 0:
+                    g["prices"].append(price)
+                if r.get("sold_lb") is not None:
+                    g["solds"].append(int(r["sold_lb"]))
 
     out = []
-    for g in groups.values():
-        avg_price = round(sum(g["prices"]) / len(g["prices"]), 2) if g["prices"] else None
-        avg_sold = round(sum(g["solds"]) / len(g["solds"]), 1) if g["solds"] else 0
+    for g in agg.values():
+        if g["items"] < 1:
+            continue
         out.append({
-            "cluster": g["cluster"],
-            "count": g["count"],
-            "avg_price": avg_price,
-            "avg_sold": avg_sold,
-            "example": g["example"][:80],
-            "_rank": g["count"] * (avg_sold or 0),
+            "key": g["key"],
+            "value": g["value"],
+            "items": g["items"],
+            "coverage": round(g["items"] / total, 3) if total else 0.0,
+            "avg_price": round(sum(g["prices"]) / len(g["prices"]), 2) if g["prices"] else None,
+            "avg_sold": round(sum(g["solds"]) / len(g["solds"]), 1) if g["solds"] else None,
+            "sold_total": sum(g["solds"]) if g["solds"] else 0,
         })
-    out.sort(key=lambda x: (x["_rank"], x["count"]), reverse=True)
-    for item in out:
-        item.pop("_rank", None)
-    return out[:top]
+    out.sort(key=lambda x: (x["items"], x["sold_total"]), reverse=True)
+    return out[:max_pairs]
+
+
+def selling_point_stats(
+    rows: list[dict],
+    features: list[str] | None = None,
+    param_words: list[str] | None = None,
+    max_words: int = 30,
+    max_params: int = 20,
+) -> dict:
+    """卖点词统计：标题词（人工/LLM 词表 + 参数值）+ 参数 key=value 明细。
+
+    只统计「至少命中 1 个商品」的词，避免词表里的死词稀释结果。
+    """
+    total = len(rows)
+    profile_words = [str(w).strip() for w in (features or []) if str(w or "").strip()]
+    value_words = [str(w).strip() for w in (param_words or []) if str(w or "").strip()]
+    value_set = set(value_words)
+    profile_set = set(profile_words)
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for w in profile_words + value_words:
+        if w not in seen:
+            seen.add(w)
+            merged.append(w)
+
+    title_items = []
+    for w in merged:
+        st = _word_stats(rows, w, total)
+        if st["items"] == 0:
+            continue
+        title_items.append({
+            "word": w,
+            "source": "param" if w in value_set and w not in profile_set else "title",
+            **st,
+        })
+    title_items.sort(key=lambda x: (x["items"], x["sold_total"]), reverse=True)
+
+    covered = 0
+    if merged:
+        covered = sum(
+            1 for r in rows
+            if any(w in (r.get("title") or "") for w in merged)
+        )
+    matched = [w for w in merged if any(w in (r.get("title") or "") for r in rows)]
+    return {
+        "words": len(matched),      # 实际命中标题的词数（未命中的不进结果）
+        "candidates": len(merged),  # 词表候选总数
+        "coverage": round(covered / total, 3) if total else 0.0,
+        "title": title_items[:max_words],
+        "params": _param_stats(rows, total, max_params),
+    }
 
 
 def top_products(rows: list[dict], n: int = 10) -> list[dict]:
@@ -287,8 +304,23 @@ def build_summary(rows: list[dict], profile: dict | None = None) -> dict:
     profile = profile or {}
     detail_prices = sum(1 for r in rows if r.get("price_source") == "detail")
     list_prices = sum(1 for r in rows if r.get("price_source") == "list")
+
+    from .profile_llm import param_keys as _param_keys
+    from .profile_llm import param_values as _param_values
+
+    # 参数 key 与取值（材质/功能/充绒量等）本身也是卖点词，直接并入词表，不依赖 LLM
+    points = selling_point_stats(
+        rows,
+        features=profile.get("features") or [],
+        param_words=_param_values(rows) + _param_keys(rows),
+    )
     return {
-        "profile": profile.get("name"),
+        "profile": {
+            "name": profile.get("name"),
+            "source": profile.get("source") or "none",
+            "words": points["words"],
+            "coverage": points["coverage"],
+        },
         "counts": {
             "candidates": len(rows),
             "detailed": sum(1 for r in rows if r.get("is_detail")),
@@ -300,10 +332,18 @@ def build_summary(rows: list[dict], profile: dict | None = None) -> dict:
         "price": {"stats": price_stats(prices), "bands": price_bands(rows)},
         "sold": {"bands": sold_bands(rows), "median": _pct(solds, 0.5)},
         "shops": shop_concentration(rows),
-        "keywords": keyword_counts(
-            [r.get("title") or "" for r in rows], features=profile.get("features")
-        ),
+        "keywords": [
+            {
+                "word": it["word"],
+                "count": it["items"],
+                "items": it["items"],
+                "coverage": it["coverage"],
+                "avg_price": it["avg_price"],
+                "avg_sold": it["avg_sold"],
+            }
+            for it in points["title"][:15]
+        ],
         "params": param_profile(rows),
-        "clusters": selling_point_clusters(rows, profile=profile),
+        "selling_points": points,
         "top_products": top_products(rows),
     }

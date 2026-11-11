@@ -1,10 +1,9 @@
 import type {
   AnalysisSummary,
+  BatchReport,
   EnvStatus,
   ExpertRun,
   ExpertSource,
-  HotwordKeyword,
-  HotwordRow,
   JobState,
   ProductDetail,
   ProductRow,
@@ -56,6 +55,12 @@ export const api = {
     request<{ ok: boolean; message: string }>(`/api/jobs/${jobId}/cancel`, { method: 'POST' }),
   discardJob: (jobId: string) =>
     request<{ ok: boolean; message: string }>(`/api/jobs/${jobId}/discard`, { method: 'POST' }),
+  confirmJob: (jobId: string, keep: boolean) =>
+    request<{ ok: boolean; message: string }>(`/api/jobs/${jobId}/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keep }),
+    }),
   reportMeta: (batch: string) =>
     request<ReportMeta>(`/api/report/meta?batch=${encodeURIComponent(batch)}`),
   expertRuns: (limit = 20) => request<ExpertRun[]>(`/api/expert/runs?limit=${limit}`),
@@ -82,9 +87,10 @@ export const api = {
       method: 'DELETE',
     }),
   tasks: () => request<TaskInfo[]>('/api/tasks'),
-  products: (taskId: string, batch: string, onlyDetail = true) =>
+  products: (taskId: string | undefined, batch: string, onlyDetail = true) =>
     request<ProductRow[]>(
-      `/api/products?task_id=${encodeURIComponent(taskId)}&batch=${encodeURIComponent(batch)}` +
+      `/api/products?batch=${encodeURIComponent(batch)}` +
+        (taskId ? `&task_id=${encodeURIComponent(taskId)}` : '') +
         `&only_detail=${onlyDetail ? 1 : 0}`,
     ),
   product: (itemId: string, platform = 'tmall') =>
@@ -105,20 +111,15 @@ export const api = {
   llmStatus: () =>
     request<{ configured: boolean; model: string | null }>('/api/analysis/llm-status'),
   analysisInsights: (taskId: string, batch: string) =>
-    request<{ text: string; model: string }>('/api/analysis/insights', {
+    request<{ text: string; model: string; saved?: boolean }>('/api/analysis/insights', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task_id: taskId, batch }),
     }),
-  fetchHotwords: (keyword: string) =>
-    request<{ keyword: string; words: string[] }>('/api/hotwords', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keyword }),
-    }),
-  hotwordHistory: (keyword?: string) =>
-    request<HotwordRow[]>(
-      `/api/hotwords${keyword ? `?keyword=${encodeURIComponent(keyword)}` : ''}`,
+  savedInsights: (taskId: string, batch: string) =>
+    request<{ saved: boolean; text: string | null; model: string | null; created_at: string | null }>(
+      `/api/analysis/insights/saved?task_id=${encodeURIComponent(taskId)}&batch=${encodeURIComponent(batch)}`,
     ),
-  hotwordKeywords: () => request<HotwordKeyword[]>('/api/hotwords/keywords'),
+  analysisReport: (batch: string) =>
+    request<BatchReport>(`/api/analysis/report?batch=${encodeURIComponent(batch)}`),
 }

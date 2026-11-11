@@ -1,6 +1,6 @@
 """登录前置编排单测（不启动浏览器）。"""
 from bkr.config import Task
-import server.jobs as jobs_mod
+import server.services.collect_service as jobs_mod
 
 
 def _task(platform: str) -> Task:

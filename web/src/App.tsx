@@ -1,17 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { App as AntApp, Button, Layout, Space, Tabs, Tag } from 'antd'
-import {
-  BarChartOutlined,
-  BulbOutlined,
-  ExperimentOutlined,
-  FireOutlined,
-  TableOutlined,
-} from '@ant-design/icons'
-import AnalysisPanel from './panels/AnalysisPanel'
-import CollectPanel from './panels/CollectPanel'
-import DataPanel from './panels/DataPanel'
+import { BulbOutlined, RocketOutlined } from '@ant-design/icons'
 import ExpertPanel from './panels/ExpertPanel'
-import HotwordsPanel from './panels/HotwordsPanel'
+import WorkbenchPanel from './panels/WorkbenchPanel'
 import { api } from './api'
 import { useSse } from './sse'
 import type { EnvStatus } from './types'
@@ -125,34 +116,16 @@ export default function App() {
       </Header>
       <Content className="app-content">
         <Tabs
-          defaultActiveKey="collect"
+          defaultActiveKey="workbench"
           items={[
             {
-              key: 'collect',
+              key: 'workbench',
               label: (
                 <span>
-                  <ExperimentOutlined /> 采集
+                  <RocketOutlined /> 工作台
                 </span>
               ),
-              children: <CollectPanel />,
-            },
-            {
-              key: 'data',
-              label: (
-                <span>
-                  <TableOutlined /> 数据
-                </span>
-              ),
-              children: <DataPanel />,
-            },
-            {
-              key: 'analysis',
-              label: (
-                <span>
-                  <BarChartOutlined /> 分析
-                </span>
-              ),
-              children: <AnalysisPanel />,
+              children: <WorkbenchPanel />,
             },
             {
               key: 'expert',
@@ -162,15 +135,6 @@ export default function App() {
                 </span>
               ),
               children: <ExpertPanel />,
-            },
-            {
-              key: 'hotwords',
-              label: (
-                <span>
-                  <FireOutlined /> 热词
-                </span>
-              ),
-              children: <HotwordsPanel />,
             },
           ]}
         />

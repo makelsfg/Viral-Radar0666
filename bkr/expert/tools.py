@@ -61,9 +61,14 @@ def get_param_profile(pack: dict, task_id: str, batch: str) -> list[dict]:
     return ((data or {}).get("summary") or {}).get("params") or []
 
 
-def get_clusters(pack: dict, task_id: str, batch: str) -> list[dict]:
+def get_selling_points(pack: dict, task_id: str, batch: str) -> dict:
     data = _batch(pack, task_id, batch)
-    return ((data or {}).get("summary") or {}).get("clusters") or []
+    points = ((data or {}).get("summary") or {}).get("selling_points") or {}
+    return {
+        "title": points.get("title") or [],
+        "params": points.get("params") or [],
+        "coverage": points.get("coverage"),
+    }
 
 
 _OPS = {
@@ -187,10 +192,10 @@ def make_tools(pack: dict) -> list[Any]:
         """返回参数画像（覆盖率较高的参数键与取值）。"""
         return str(get_param_profile(pack, task_id, batch))
 
-    @_lc_tool("get_clusters")
-    def _clusters(task_id: str, batch: str) -> str:
-        """返回卖点组合聚类（数量、均价、均销量、示例标题）。"""
-        return str(get_clusters(pack, task_id, batch))
+    @_lc_tool("get_selling_points")
+    def _points(task_id: str, batch: str) -> str:
+        """返回卖点词统计：标题命中词 + 参数 key=value，含商品数/覆盖率/均价/均销量。"""
+        return str(get_selling_points(pack, task_id, batch))
 
     @_lc_tool("calculate")
     def _calc(expression: str) -> str:
@@ -209,5 +214,5 @@ def make_tools(pack: dict) -> list[Any]:
 
     return [
         _search, _get, _overview, _price, _sold, _top, _kw, _param,
-        _clusters, _calc, _check_numbers, _check_mix,
+        _points, _calc, _check_numbers, _check_mix,
     ]

@@ -30,6 +30,7 @@ const STATUS_TEXT: Record<string, string> = {
   timeout: '超时',
   cancelling: '正在结束',
   cancelled: '已取消',
+  pending_confirm: '待确认',
 }
 const STATUS_COLOR: Record<string, string> = {
   running: 'processing',
@@ -41,6 +42,7 @@ const STATUS_COLOR: Record<string, string> = {
   timeout: 'warning',
   cancelling: 'warning',
   cancelled: 'default',
+  pending_confirm: 'warning',
 }
 const PLATFORM_LABELS: Record<string, string> = {
   tmall: '天猫',
@@ -48,7 +50,13 @@ const PLATFORM_LABELS: Record<string, string> = {
   pdd: '拼多多',
 }
 
-export default function CollectPanel() {
+export default function CollectPanel({
+  onCollected,
+  hideReportAlert = false,
+}: {
+  onCollected?: (batch: string, taskId?: string) => void
+  hideReportAlert?: boolean
+} = {}) {
   const { message, modal } = AntApp.useApp()
   const [form] = Form.useForm()
   const [job, setJob] = useState<JobState | null>(null)
@@ -99,6 +107,16 @@ export default function CollectPanel() {
       alive = false
     }
   }, [job?.status, job?.batch])
+
+  // 采集完成（或部分失败）后通知外层：可以去加载这一批的数据和报告
+  const collectedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!job?.batch || !['done', 'failed'].includes(job.status)) return
+    const key = `${job.id}:${job.status}`
+    if (collectedRef.current === key) return
+    collectedRef.current = key
+    onCollected?.(job.batch, job.task_id)
+  }, [job?.id, job?.status, job?.batch, job?.task_id, onCollected])
 
   const start = async (values: any) => {
     try {
@@ -202,6 +220,44 @@ export default function CollectPanel() {
       },
     })
   }, [job?.status, job?.id, cancelRequested, modal, message])
+
+  // 任一平台失败 → 立即弹窗：保存已采数据（其余平台继续） or 中断并丢弃
+  const confirmPromptedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!job?.confirm_needed || job?.confirm_state) return
+    if (confirmPromptedRef.current === job.id) return
+    confirmPromptedRef.current = job.id
+    const failedPlatform = (job.platforms_status || [])
+      .filter((s) => s.status === 'failed' || s.status === 'pending_confirm')
+      .map((s) => PLATFORM_LABELS[s.platform] || s.platform)
+      .join('、')
+    modal.confirm({
+      title: `「${failedPlatform || '部分平台'}」采集失败，是否保存本次已采数据？`,
+      content:
+        '点「保存」：保留已成功平台的数据，其余平台继续采集；点「不保存」：立即中断本次采集并删除全部已采数据（不可恢复）。',
+      okText: '保存已采数据',
+      cancelText: '不保存并中断',
+      closable: false,
+      maskClosable: false,
+      onOk: async () => {
+        try {
+          await api.confirmJob(job.id, true)
+          message.success('已确认保存，其余平台继续采集')
+        } catch (e: any) {
+          message.error(e.message || '确认失败')
+        }
+      },
+      onCancel: async () => {
+        try {
+          await api.confirmJob(job.id, false)
+          setRunOpen(false)
+          message.success('已中断采集，本次结果不保存')
+        } catch (e: any) {
+          message.error(e.message || '中断失败')
+        }
+      },
+    })
+  }, [job?.confirm_needed, job?.confirm_state, job?.id, job?.platforms_status, modal, message])
 
   const openLogin = async () => {
     setLoginRunning(true)
@@ -424,6 +480,7 @@ export default function CollectPanel() {
                     failed: '失败',
                     done: '已完成',
                     cancelled: '已取消',
+                    pending_confirm: '待确认',
                   }
                   const color =
                     s.status === 'done'
@@ -492,7 +549,7 @@ export default function CollectPanel() {
           )}
             </>
           )}
-          {report && ['done', 'failed'].includes(job.status) && (
+          {report && ['done', 'failed'].includes(job.status) && !hideReportAlert && (
             <Alert
               type={job.status === 'done' ? 'success' : 'warning'}
               showIcon

@@ -1,4 +1,4 @@
-"""采集接口：按关键词与平台创建任务（每平台独立任务），支持续采。"""
+"""控制层：采集接口（创建任务、状态查询、取消/确认/丢弃、续采）。"""
 from __future__ import annotations
 
 import hashlib
@@ -7,11 +7,12 @@ import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from bkr import db
+from bkr import database
 from bkr.collector import batch_id
 from bkr.config import Task
+from bkr.repositories import task_repo
 
-from ..jobs import BusyError, manager
+from ..services.collect_service import BusyError, manager
 
 router = APIRouter()
 
@@ -45,19 +46,16 @@ def _loads(value, default):
 
 
 def _task_from_db(task_id: str) -> Task:
-    conn = db.connect()
-    try:
-        r = conn.execute("SELECT * FROM dim_task WHERE task_id=?", (task_id,)).fetchone()
-    finally:
-        conn.close()
+    with database.connection() as conn:
+        r = task_repo.get_task(conn, task_id)
     if not r:
         raise HTTPException(status_code=404, detail=f"任务不存在：{task_id}")
     return Task(
         task_id=r["task_id"],
         name=r["name"],
         keywords=_loads(r["keywords"], [r["name"]]),
-        platform=(r["platform"] if "platform" in r.keys() else "tmall") or "tmall",
-        pace=(r["pace"] if "pace" in r.keys() else "safe") or "safe",
+        platform=r.get("platform") or "tmall",
+        pace=r.get("pace") or "safe",
         sort=r["sort"] or "sale-desc",
         pages=int(r["pages"] or 1),
         detail_top=int(r["detail_top"] or 6),
@@ -90,25 +88,22 @@ def collect(req: CollectRequest):
             detail=f"平台暂未接入：{', '.join(invalid)}（当前支持：天猫、1688、拼多多）",
         )
 
-    tasks = []
-    for platform in platforms:
-        label = PLATFORM_LABELS.get(platform, platform)
-        tasks.append(
-            Task(
-                task_id=_task_id_for(keyword, platform),
-                name=f"{keyword} · {label}",
-                keywords=[keyword],
-                platform=platform,
-                pace=req.pace,
-                pages=1 if req.mode == "conservative" else req.pages,
-                detail_top=0 if req.mode == "conservative" else req.detail_top,
-                detail_order=req.detail_order,
-                price_min=req.price_min,
-                price_max=req.price_max,
-                exclude_words=[w.strip() for w in req.exclude_words if w.strip()],
-            )
+    tasks = [
+        Task(
+            task_id=_task_id_for(keyword, platform),
+            name=f"{keyword} · {PLATFORM_LABELS.get(platform, platform)}",
+            keywords=[keyword],
+            platform=platform,
+            pace=req.pace,
+            pages=1 if req.mode == "conservative" else req.pages,
+            detail_top=0 if req.mode == "conservative" else req.detail_top,
+            detail_order=req.detail_order,
+            price_min=req.price_min,
+            price_max=req.price_max,
+            exclude_words=[w.strip() for w in req.exclude_words if w.strip()],
         )
-
+        for platform in platforms
+    ]
     try:
         return manager.start_collect_many(tasks, batch_id())
     except BusyError as e:
@@ -140,6 +135,21 @@ def discard_job(job_id: str):
     if not manager.get(job_id):
         raise HTTPException(status_code=404, detail="任务不存在")
     ok, msg = manager.discard(job_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"ok": True, "message": msg}
+
+
+class ConfirmRequest(BaseModel):
+    keep: bool = True
+
+
+@router.post("/jobs/{job_id}/confirm")
+def confirm_job(job_id: str, req: ConfirmRequest):
+    """采集失败时的确认：keep=True 保留已采数据并继续采集；False 中断并丢弃。"""
+    if not manager.get(job_id):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    ok, msg = manager.confirm(job_id, req.keep)
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
     return {"ok": True, "message": msg}
@@ -178,8 +188,7 @@ def resume(job_id: str):
         raise HTTPException(status_code=400, detail="该任务不可续采")
     if job.get("status") != "paused_captcha":
         raise HTTPException(status_code=400, detail="当前状态无需续采")
-    task_ids = job.get("_task_ids") or [job["task_id"]]
-    tasks = [_task_from_db(tid) for tid in task_ids]
+    tasks = [_task_from_db(tid) for tid in (job.get("_task_ids") or [job["task_id"]])]
     try:
         return manager.start_collect_many(tasks, job["batch"], resume=True)
     except BusyError as e:

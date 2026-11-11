@@ -5,6 +5,7 @@ export interface TaskInfo {
   pages: number
   detail_top: number
   batches: string[]
+  ai_batches?: string[]
 }
 
 export interface ProductRow {
@@ -76,6 +77,8 @@ export interface JobState {
   task_total?: number
   platforms?: string[]
   platforms_status?: PlatformRuntimeStatus[]
+  confirm_needed?: boolean
+  confirm_state?: 'keep' | 'discarded' | null
   message?: string | null
   error?: string | null
 }
@@ -116,6 +119,20 @@ export interface ReportMeta {
     items: number
     details: number
   }[]
+}
+
+export interface BatchReport {
+  batch: string
+  keyword: string
+  platforms: {
+    task_id: string
+    platform: string
+    label: string
+    status: string
+    items: number
+    details: number
+  }[]
+  markdown: string
 }
 
 export interface ExpertSource {
@@ -165,21 +182,15 @@ export interface ExpertRun {
   created_at?: string
   finished_at?: string | null
   sources?: ExpertSource[]
+  evidence?: ExpertEvidence[]
   rounds?: ExpertRound[]
 }
 
-export interface HotwordKeyword {
-  keyword: string
-  last_at: string
-  count: number
-}
-
-export interface HotwordRow {
-  id: number
-  keyword: string
-  word: string
-  rank: number
-  created_at: string
+export interface ExpertEvidence {
+  id: string
+  kind?: string
+  source?: string
+  text?: string
 }
 
 export interface AnalysisBand {
@@ -188,6 +199,37 @@ export interface AnalysisBand {
   sold?: number
   min?: number
   max?: number
+}
+
+export interface SellingPointWord {
+  word: string
+  source: 'title' | 'param'
+  items: number
+  coverage: number
+  avg_price: number | null
+  avg_sold: number | null
+  sold_total: number
+}
+
+export interface SellingPointParam {
+  key: string
+  value: string
+  items: number
+  coverage: number
+  avg_price: number | null
+  avg_sold: number | null
+  sold_total: number
+}
+
+export interface ProfileMeta {
+  name: string | null
+  source: string
+  label?: string
+  status?: 'ready' | 'generating' | 'failed' | 'unavailable' | 'none'
+  message?: string | null
+  keyword?: string
+  words: number
+  coverage: number
 }
 
 export interface AnalysisSummary {
@@ -217,15 +259,15 @@ export interface AnalysisSummary {
     distinct: number
     top5_share: number
   }
-  keywords: { word: string; count: number }[]
+  keywords: { word: string; count: number; items?: number; coverage?: number }[]
   params: { key: string; coverage: number; top: { value: string; count: number }[] }[]
-  clusters: {
-    cluster: string
-    count: number
-    avg_price: number | null
-    avg_sold: number
-    example: string
-  }[]
+  selling_points: {
+    words: number
+    coverage: number
+    title: SellingPointWord[]
+    params: SellingPointParam[]
+  }
+  profile: ProfileMeta
   top_products: {
     item_id: string
     title: string | null

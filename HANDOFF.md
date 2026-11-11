@@ -1,6 +1,6 @@
 # 爆款雷达 · 交接说明（HANDOFF）
 
-> 当前版本：**0.17.7**（2026-11-02）
+> 当前版本：**0.17.8**（2026-11-09）
 > 项目目录：`E:\agent_培训代码库\爆款分析\baokuan-radar`
 > 新会话请先读本文件 + 项目记忆 `project_baokuan_radar.md`，再继续。
 
@@ -17,8 +17,8 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 - 前端：React + TypeScript + Vite + Ant Design 5（`web/`）
 - 后端：FastAPI（`server/`）+ Playwright/patchright（`bkr/`）+ SQLite（`data/radar.db`）
 - 配置：`config/settings.yaml`（浏览器 channel=msedge，engine=auto；当前自动使用 **patchright**；detail.provider=local；LLM key 已配置）
-- 版本探针：`GET /api/health` → 应显示 `0.17.7`、`engine=patchright`、`channel=msedge`
-- 前端五个页签：采集 / 数据 / 分析 / 大佬分析 / 热词
+- 版本探针：`GET /api/health` → 应显示 `0.17.8`、`engine=patchright`、`channel=msedge`
+- 前端顶级页签：工作台（内含 采集 / 数据 / 分析）、大佬分析
 
 ## 当前流程
 
@@ -37,6 +37,15 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Proce
 
 - 每平台仅保留一个工作标签页（列表/详情复用；详情弹窗临时关闭），移除 keep-alive/乱码标签
 - 1688 销量解析兼容"成交 N 笔 / 已售 N 个 / N万+"；详情已售/加购回填快照，数据页可显示并按已售排序
+
+## 最近变更（0.17.8）
+
+- **卖点词表改为数据驱动**：`analysis_profile` 表 + `bkr/profile_llm.py`。YAML（人工）→ DB 缓存（LLM 生成）→ 参数 key/value（无需 LLM）三级来源；未命中品类在分析页**后台**用本批 ≤60 条真实标题调 LLM 生成词表（timeout 30s、同关键词并发去重、失败 60s 冷却后重试），前端显示「正在分析卖点词」并 3s 轮询刷新
+- **删除「卖点组合聚类」**：`selling_point_clusters` 及容量/价格带分组逻辑移除，改为 `selling_points` 统计（标题命中词 + 参数 key=value，含商品数/覆盖率/均价/均销量/销量合计）；分析页、单批次报告、专家证据包/工具（`get_selling_points`）、AI 解读 payload 全部同步
+- **移除「默认」通用词表**：未命中品类不再退回保温/便携等无关词，避免产出「看起来正常」的垃圾统计；未配置 LLM 时只统计参数卖点
+- **参数并入词表**：参数值（逗号/顿号串自动拆分）与参数 key 直接参与卖点词统计；纯规格值（500ML / 316L）不计入
+- 词表校验：模型输出的词必须在本批标题/参数中有依据（≥10 条标题要求命中 2 次，小样本退化为 1 次），品类词/促销词/纯数字直接丢弃
+- 新增 `tests/test_profile.py`；单测 97 通过
 
 ## 最近变更（0.17.7）
 

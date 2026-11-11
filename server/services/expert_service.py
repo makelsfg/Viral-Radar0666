@@ -1,13 +1,13 @@
-"""大佬分析服务：创建运行、后台执行、取消与查询。"""
+"""大佬分析服务：创建运行、后台执行（LangGraph）、取消与查询。"""
 from __future__ import annotations
 
 import threading
 import uuid
 from datetime import datetime
 
-from .. import db
-from . import store
-from .graph import ExpertCancelled, build_graph
+from bkr import database
+from bkr.expert.graph import ExpertCancelled, build_graph
+from bkr.repositories import expert_repo
 
 
 class ExpertBusy(RuntimeError):
@@ -45,16 +45,16 @@ class ExpertService:
             raise ValueError("请至少选择一个批次，或上传报告/填写笔记")
         run_id = "ex-" + uuid.uuid4().hex[:10]
         final_title = self._unique_title(title.strip() or default_title(keyword))
-        run = store.create_run(
-            run_id, final_title, keyword.strip(),
-            clean, int(max_rounds), int(pass_score),
-        )
+        with database.connection() as conn:
+            expert_repo.create_run(
+                conn, run_id, final_title, keyword.strip(),
+                clean, int(max_rounds), int(pass_score),
+            )
+            run = expert_repo.get_run(conn, run_id) or {}
         event = threading.Event()
         with self._lock:
             self._cancels[run_id] = event
-        thread = threading.Thread(
-            target=self._execute, args=(run_id, event), daemon=True
-        )
+        thread = threading.Thread(target=self._execute, args=(run_id, event), daemon=True)
         with self._lock:
             self._threads[run_id] = thread
         thread.start()
@@ -62,7 +62,7 @@ class ExpertService:
         return run
 
     def cancel(self, run_id: str) -> bool:
-        run = store.get_run(run_id, with_rounds=False)
+        run = self.get(run_id, with_rounds=False)
         if not run:
             return False
         if run.get("status") in ("done", "needs_human", "failed", "cancelled"):
@@ -70,32 +70,37 @@ class ExpertService:
         event = self._cancels.get(run_id)
         if event is not None:
             event.set()
-        store.update_run(run_id, status="cancelling")
+        self._update(run_id, status="cancelling")
         self._publish(run_id, "stage", {"stage": "cancelling", "message": "正在取消"})
         return True
 
-    def get(self, run_id: str) -> dict | None:
-        return store.get_run(run_id)
+    def get(self, run_id: str, with_rounds: bool = True) -> dict | None:
+        with database.connection() as conn:
+            return expert_repo.get_run(conn, run_id, with_rounds=with_rounds)
 
     def list(self, limit: int = 20) -> list[dict]:
-        return store.list_runs(limit)
+        with database.connection() as conn:
+            return expert_repo.list_runs(conn, limit)
 
     def delete(self, run_id: str) -> bool:
         event = self._cancels.get(run_id)
         if event is not None:
             event.set()
-        return store.delete_run(run_id)
+        with database.connection() as conn:
+            return expert_repo.delete_run(conn, run_id)
 
     # ---------- 内部 ----------
+
+    @staticmethod
+    def _update(run_id: str, **fields) -> None:
+        with database.connection() as conn:
+            expert_repo.update_run(conn, run_id, **fields)
 
     def _unique_title(self, base: str) -> str:
         """多个任务不可重名：重名时自动追加 (1)/(2)…"""
         try:
-            conn = db.connect()
-            try:
-                titles = {r[0] for r in conn.execute("SELECT title FROM expert_run")}
-            finally:
-                conn.close()
+            with database.connection() as conn:
+                titles = expert_repo.list_titles(conn)
         except Exception:
             return base
         if base not in titles:
@@ -137,7 +142,7 @@ class ExpertService:
         return out
 
     def _execute(self, run_id: str, cancel_event: threading.Event) -> None:
-        run = store.get_run(run_id, with_rounds=False)
+        run = self.get(run_id, with_rounds=False)
         if not run:
             return
         try:
@@ -159,22 +164,22 @@ class ExpertService:
                 "error": None,
             }
             result = graph.invoke(state, config={"recursion_limit": 30})
-            final = store.get_run(run_id, with_rounds=False) or {}
+            final = self.get(run_id, with_rounds=False) or {}
             if final.get("status") == "running":
                 status = "done" if result.get("status") == "done" else "failed"
-                store.update_run(
+                self._update(
                     run_id, status=status,
                     final_report_md=final.get("final_report_md") or result.get("draft_md"),
                 )
         except ExpertCancelled:
-            store.update_run(run_id, status="cancelled", error="用户已取消")
+            self._update(run_id, status="cancelled", error="用户已取消")
             self._publish(run_id, "done", {"status": "cancelled", "message": "已取消"})
         except Exception as exc:  # noqa: BLE001
             msg = self._humanize(exc)
-            store.update_run(run_id, status="failed", error=msg)
+            self._update(run_id, status="failed", error=msg)
             self._publish(run_id, "error", {"status": "failed", "message": msg})
         finally:
-            store.update_run(run_id, finished_at=_now())
+            self._update(run_id, finished_at=_now())
             with self._lock:
                 self._threads.pop(run_id, None)
                 self._cancels.pop(run_id, None)
@@ -191,9 +196,9 @@ class ExpertService:
         return msg
 
     def _publish(self, run_id: str, event: str, payload: dict) -> None:
-        from server.jobs import bus
+        from .collect_service import bus
 
-        run = store.get_run(run_id, with_rounds=False) or {}
+        run = self.get(run_id, with_rounds=False) or {}
         summary = {
             "id": run_id,
             "title": run.get("title"),

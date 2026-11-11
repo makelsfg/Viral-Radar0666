@@ -2,7 +2,9 @@
 
 本地前后端应用：输入商品关键词和采样量，自动采集天猫、1688、拼多多搜索结果与头部商品详情（标题、到手价、已售、加购、店铺、SKU、参数、首张主图），实时进度展示，一行一商品浏览、详情查看，并可一键导出**一次搜索的跨平台合并报告**。
 
-技术栈：Python 3.12 · FastAPI · Playwright · SQLite ／ React 18 · TypeScript · Vite · Ant Design 5 · SSE
+技术栈：Python 3.12 · FastAPI · Playwright · MySQL/SQLite ／ React 18 · TypeScript · Vite · Ant Design 5 · SSE
+
+分层：`server/api`（控制层）→ `server/services`（服务层）→ `bkr/repositories`（数据访问层）
 
 ## 快速开始（Windows）
 
@@ -29,8 +31,8 @@
 - **1688 图片**：数据库存原始 URL；页面显示走本地代理 `/api/image`（带 1688 Referer），解决 CDN 防盗链白图；CSV 导出仍为原始链接
 - **保守模式**：采集页右上角开关（默认开启），只采搜索结果列表、不访问任何详情页，风控最低；数据页关掉「只看已采详情」即可查看候选商品
 - **数据**：品类/批次切换、主图与标题、到手价、已售、加购、店铺评分/好评率、SKU 数、商品链接；点击行打开抽屉看参数与 SKU、历史批次；支持删除品类/批次（二次确认）；「只看已采详情」开关；一键导出 CSV
-- **分析**：批次概览指标、价格带/销量区间分布、店铺集中度、标题关键词、参数画像、卖点组合聚类、爆款候选 Top10；可选 AI 解读（需配置 LLM）
-- **热词**：查询淘宝搜索联想词并落库回看，用于发现细分需求方向；单次查询仅一次轻量请求，建议按需使用
+- **分析**：批次概览指标、价格带/销量区间分布、店铺集中度、**卖点词统计（标题命中词 + 参数 key=value，含商品数/覆盖率/均价/均销量）**、爆款候选 Top10；可选 AI 解读（需配置 LLM）
+- **卖点词表**：三级来源 —— `config/analysis_profiles.yaml`（人工，优先级最高）→ `analysis_profile` 表（LLM 生成缓存）→ 参数值/参数 key（无需 LLM）。未命中人工词表的品类会在分析页**后台**用本批 60 条真实标题调 LLM 生成并落库（首次约 10–30 秒，页面显示「正在分析卖点词」并自动刷新）；未配置 LLM 时只统计参数卖点，不再用通用词表硬凑
 
 ## 配置文件（推荐）
 
@@ -52,7 +54,7 @@ llm:
 
 「大佬分析」页签把多个采集批次、已有分析报告和手动笔记汇总成一份证据包，由两个 Agent 协作产出决策报告：
 
-1. **电商大佬 Agent** 写初版报告（可调用批次概览、价格带、Top 商品、关键词、参数、聚类、证据检索等只读工具）；
+1. **电商大佬 Agent** 写初版报告（可调用批次概览、价格带、Top 商品、卖点词（标题 + 参数）、参数画像、证据检索等只读工具）；
 2. **审查 Agent** 按固定评分表审查（证据、洞察、可执行性、逻辑、风险），输出 `通过/打回 + 分数 + 必须修复的问题`；
 3. 打回则大佬根据问题重写，默认最多 3 轮；3 轮未通过标记「需人工复核」，保留最高分草稿。
 
@@ -78,7 +80,7 @@ expert:
 
 ## 分析页与 LLM 配置（可选）
 
-「分析」页对选中批次输出：概览指标、价格带/销量分布、店铺集中度、关键词、参数画像、卖点组合、爆款候选 Top10。
+「分析」页对选中批次输出：概览指标、价格带/销量分布、店铺集中度、卖点词统计（标题词 + 参数 key/value）、参数画像、爆款候选 Top10。
 
 AI 解读为可选项，需要 OpenAI 兼容接口（如 DeepSeek）：在启动前设置环境变量并重启服务：
 
@@ -111,7 +113,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q
 ```
 
-包含采集解析（价格/销量区间）与分析计算（分布/参数/聚类）单测。
+包含采集解析（价格/销量区间）、分析计算（分布/参数/卖点词）与词表校验的单测。
 
 ## 报告导出
 
@@ -128,23 +130,46 @@ python -m pytest tests -q
 - 「合并报告」默认导出全部候选行（含未采详情）；数据页按钮跟随当前开关
 - CLI：`python -m bkr.cli export --task ... --batch latest` 默认导出全部候选；加 `--only-detail` 仅导出详情
 
-## 目录结构
+## 目录结构（三层架构）
 
 ```
 baokuan-radar/
-├─ bkr/                # 采集核心：Playwright、解析、评分预留、SQLite
-├─ server/             # FastAPI：任务管理、SSE、数据接口、静态托管
-│  ├─ main.py          #   入口（python -m server.main）
-│  ├─ jobs.py          #   采集/登录线程 + 单会话锁 + 事件总线
-│  └─ routes/          #   collect / data / env / events
-├─ web/                # React + TS + Ant Design 5（Vite）
-│  ├─ src/panels/      #   采集页、数据页、分析页
-│  └─ dist/            #   构建产物（npm run build 生成，由 FastAPI 托管）
-├─ legacy/             # 旧版 Streamlit 页面（不维护，依赖见 requirements-legacy.txt）
-├─ config/tasks/       # 品类 YAML（命令行方式使用；网页方式按关键词动态建任务）
-├─ data/               # radar.db、raw 原始数据、debug 诊断文件
-├─ 安装环境.bat         # 首次安装
-└─ 启动.bat            # 日常启动
+├─ server/                  # Web 层
+│  ├─ main.py               #   入口（挂载路由、静态托管、一键启动）
+│  ├─ api/                  #   控制层 Controller：只做参数校验 + 调服务层
+│  │  ├─ collect_api.py     #     采集任务、取消/确认/续采
+│  │  ├─ data_api.py        #     批次商品、详情、CSV 导出、删除
+│  │  ├─ analysis_api.py    #     分析汇总、AI 解读、单批次报告
+│  │  ├─ expert_api.py      #     大佬分析运行记录
+│  │  ├─ env_api.py         #     环境/登录状态
+│  │  └─ events_api.py      #     SSE 事件流
+│  ├─ services/             #   服务层 Service：业务编排
+│  │  ├─ collect_service.py #     登录前置 → 并行 worker → 状态机/失败确认
+│  │  ├─ data_service.py    #     查询/导出/删除
+│  │  ├─ analysis_service.py#     统计汇总 + 单批次报告（合并 AI）
+│  │  ├─ insight_service.py #     LLM 调用 + AI 报告读写
+│  │  ├─ expert_service.py  #     大佬分析运行编排
+│  │  └─ env_service.py     #     平台登录状态
+│  └─ utils.py              #   图片代理等小工具
+├─ bkr/                     # 领域层：采集引擎 + 数据访问
+│  ├─ database.py           #   数据访问层基础设施：连接 + SQL 方言适配
+│  ├─ repositories/         #   数据访问层 Repository：每表一个模块，只写 SQL
+│  │  ├─ schema.py          #     表结构（SQLite / MySQL 两套 DDL）
+│  │  ├─ task_repo.py / product_repo.py / snapshot_repo.py
+│  │  ├─ batch_repo.py / ai_insight_repo.py / platform_auth_repo.py
+│  │  └─ expert_repo.py / agent_repo.py
+│  ├─ collector.py          #   采集编排（列表 → 详情 → 入库）
+│  ├─ worker.py             #   单平台采集子进程
+│  ├─ platforms/            #   天猫/1688/拼多多适配
+│  ├─ expert/ agent/        #   大佬分析图、采集监督 Agent
+│  └─ config.py parse.py auth.py browser.py analysis.py ...
+├─ web/                     # 前端 React + TS + Ant Design 5（Vite）
+│  ├─ src/panels/           #   采集页、数据页、分析页、大佬分析
+│  └─ dist/                 #   构建产物（npm run build 生成，由 FastAPI 托管）
+├─ config/tasks/            # 品类 YAML（命令行方式；网页方式按关键词动态建任务）
+├─ data/                    # radar.db（未配 MySQL 时）、raw 原始数据、debug 诊断
+├─ 安装环境.bat              # 首次安装
+└─ 启动.bat                 # 日常启动
 ```
 
 ## 采集机制与口径

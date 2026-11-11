@@ -4,41 +4,54 @@ import tempfile
 
 import pytest
 
-from bkr import db
-from bkr.expert import evidence as ev
+from bkr import database
 from bkr.expert import graph as g
-from bkr.expert import store
+from bkr.repositories import batch_repo, expert_repo, snapshot_repo, task_repo
 
 pytest.importorskip("langgraph")
 
 
 def _seed(path):
-    conn = db.connect(path)
-    task = type("T", (), {
-        "task_id": "t1", "name": "手表 · 天猫", "keywords": ["手表"],
-        "platform": "tmall", "pace": "safe", "tab": "mall", "sort": "sale-desc",
-        "pages": 1, "detail_top": 0, "detail_order": "sold",
-        "price_min": None, "price_max": None, "exclude_words": [], "save_html": False,
-    })()
-    db.upsert_task(conn, task)
-    db.ensure_batch(conn, "b1", "t1")
-    db.upsert_snapshot(conn, "t1", "100", "b1", "2026-11-01T10:00:00", 1,
-                       "¥199", "已售 5000+", 5000, None, None,
-                       title="手表", platform="tmall")
-    conn.commit()
-    conn.close()
+    with database.connection(path) as conn:
+        task = type("T", (), {
+            "task_id": "t1", "name": "手表 · 天猫", "keywords": ["手表"],
+            "platform": "tmall", "pace": "safe", "tab": "mall", "sort": "sale-desc",
+            "pages": 1, "detail_top": 0, "detail_order": "sold",
+            "price_min": None, "price_max": None, "exclude_words": [], "save_html": False,
+        })()
+        task_repo.upsert_task(conn, task)
+        batch_repo.ensure_batch(conn, "b1", "t1")
+        snapshot_repo.upsert_snapshot(
+            conn, "t1", "100", "b1", "2026-11-01T10:00:00", 1,
+            "¥199", "已售 5000+", 5000, None, None,
+            title="手表", platform="tmall",
+        )
+        conn.commit()
 
 
 def _setup(monkeypatch, path):
     _seed(path)
-    orig = db.connect
-    monkeypatch.setattr(db, "connect", lambda p=None: orig(p or path))
+    orig = database.connect
+    monkeypatch.setattr(database, "connect", lambda p=None: orig(p or path))
+
+
+def _create_run(path, run_id, max_rounds):
+    with database.connection(path) as conn:
+        expert_repo.create_run(
+            conn, run_id, "测试", "手表",
+            [{"type": "batch", "task_id": "t1", "batch": "b1"}], max_rounds, 85,
+        )
+
+
+def _get_run(path, run_id):
+    with database.connection(path) as conn:
+        return expert_repo.get_run(conn, run_id)
 
 
 def test_graph_revise_then_pass(monkeypatch):
     path = os.path.join(tempfile.mkdtemp(), "g.db")
     _setup(monkeypatch, path)
-    store.create_run("ex-g1", "测试", "手表", [{"type": "batch", "task_id": "t1", "batch": "b1"}], 3, 85)
+    _create_run(path, "ex-g1", 3)
 
     seq = [
         {"verdict": "revise", "score": 60, "dimension_scores": {"evidence": 60}, "issues": [
@@ -61,15 +74,16 @@ def test_graph_revise_then_pass(monkeypatch):
     }
     result = graph.invoke(state, config={"recursion_limit": 30})
     assert result["status"] == "done"
-    assert store.get_run("ex-g1")["status"] == "done"
-    assert len(store.get_run("ex-g1")["rounds"]) >= 4
+    run = _get_run(path, "ex-g1")
+    assert run["status"] == "done"
+    assert len(run["rounds"]) >= 4
     assert any(e == "done" for e, _ in events)
 
 
 def test_graph_max_rounds_needs_human(monkeypatch):
     path = os.path.join(tempfile.mkdtemp(), "g2.db")
     _setup(monkeypatch, path)
-    store.create_run("ex-g2", "测试", "手表", [{"type": "batch", "task_id": "t1", "batch": "b1"}], 2, 85)
+    _create_run(path, "ex-g2", 2)
 
     monkeypatch.setattr(g, "_writer", lambda state, feedback, round_no: f"# 草稿{round_no}")
     monkeypatch.setattr(g, "_reviewer", lambda state: {
@@ -89,6 +103,6 @@ def test_graph_max_rounds_needs_human(monkeypatch):
     }
     result = graph.invoke(state, config={"recursion_limit": 30})
     assert result["status"] == "needs_human"
-    run = store.get_run("ex-g2")
+    run = _get_run(path, "ex-g2")
     assert run["status"] == "needs_human"
     assert run["final_report_md"]

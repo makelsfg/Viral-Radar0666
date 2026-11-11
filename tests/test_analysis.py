@@ -5,7 +5,7 @@ from bkr.analysis import (
     param_profile,
     price_bands,
     price_stats,
-    selling_point_clusters,
+    selling_point_stats,
     shop_concentration,
     sold_bands,
 )
@@ -81,11 +81,14 @@ def test_shop_concentration():
     assert 0 <= res["top5_share"] <= 1
 
 
-def test_keyword_counts():
-    words = {w["word"]: w["count"] for w in keyword_counts(["保温杯", "保温杯 吸管", "冲锋衣"])}
+def test_keyword_counts_uses_item_hits():
+    words = {
+        w["word"]: w["items"]
+        for w in keyword_counts(["保温杯", "保温杯 吸管"], features=["保温杯", "吸管", "冲锋衣"])
+    }
     assert words["保温杯"] == 2
     assert words["吸管"] == 1
-    assert "冲锋衣" in words
+    assert "冲锋衣" not in words          # 词表里有但没命中，不输出
 
 
 def test_param_profile():
@@ -97,14 +100,23 @@ def test_param_profile():
     assert {v["value"] for v in mat["top"]} == {"316不锈钢", "304不锈钢"}
 
 
-def test_clusters_include_capacity_and_material():
-    clusters = selling_point_clusters(ROWS)
-    assert clusters
-    joined = " ".join(c["cluster"] for c in clusters)
-    assert "316不锈钢" in joined
-    assert "500" in joined or "600ml" in joined
-    top = clusters[0]
-    assert top["count"] >= 1
+def test_selling_points_title_and_params():
+    sp = build_summary(ROWS)["selling_points"]
+    words = {w["word"]: w for w in sp["title"]}
+    assert "保温" in words                  # 参数值「保温」并入词表并命中标题
+    assert words["保温"]["items"] >= 2
+    assert 0 < words["保温"]["coverage"] <= 1
+    assert words["保温"]["avg_price"] is not None
+
+    pairs = {(p["key"], p["value"]) for p in sp["params"]}
+    assert ("材质", "316不锈钢") in pairs
+    assert ("功能", "吸管") in pairs          # 「保温,吸管」被拆成两个取值
+
+
+def test_selling_points_drop_unhit_words():
+    rows = [_row("1", "儿童保温杯", 50, 100, "A")]
+    sp = selling_point_stats(rows, features=["保温", "完全不存在的词"])
+    assert [w["word"] for w in sp["title"]] == ["保温"]
 
 
 def test_build_summary_shape():

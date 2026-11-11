@@ -1,12 +1,13 @@
-"""演示数据：不联网、不登录也能先把 Streamlit 页面跑起来看效果。"""
+"""演示数据：不联网、不登录也能先把页面跑起来看效果。"""
 from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
 
-from . import db
+from . import database
 from .config import Task
 from .parse import canonical_url
+from .repositories import batch_repo, product_repo, snapshot_repo, task_repo
 
 _TASK = Task(task_id="kids-bottle", name="儿童保温杯", keywords=["儿童保温杯"])
 
@@ -89,8 +90,8 @@ _ITEMS = [
 
 
 def seed() -> None:
-    conn = db.connect()
-    db.upsert_task(conn, _TASK)
+    conn = database.connect()
+    task_repo.upsert_task(conn, _TASK)
 
     now = datetime.now()
     batches = [
@@ -100,9 +101,9 @@ def seed() -> None:
 
     for batch, factor in batches:
         stamp = now.isoformat(timespec="seconds")
-        db.ensure_batch(conn, batch, _TASK.task_id)
+        batch_repo.ensure_batch(conn, batch, _TASK.task_id)
         for i, it in enumerate(_ITEMS, 1):
-            db.upsert_product(conn, {
+            product_repo.upsert_product(conn, {
                 "item_id": it["id"],
                 "title": it["title"],
                 "shop_name": it["shop"],
@@ -118,15 +119,15 @@ def seed() -> None:
             })
             sold = int(it["sold"][1] * factor)
             cart = int(it["cart"][1] * factor)
-            db.upsert_snapshot(
+            snapshot_repo.upsert_snapshot(
                 conn, _TASK.task_id, it["id"], batch, stamp, i,
                 f"¥{it['price'][0]} 优惠后", f"{sold}+人付款", sold,
                 f"超{cart}人加购", cart,
             )
-            db.set_snapshot_detail(conn, _TASK.task_id, it["id"], batch, it["price"][1])
-        db.set_batch(conn, batch, _TASK.task_id, status="done", stage="done",
-                     page_done=_TASK.pages, detail_done=len(_ITEMS),
-                     items_count=len(_ITEMS), finished_at=stamp)
+            snapshot_repo.set_detail(conn, _TASK.task_id, it["id"], batch, it["price"][1])
+        batch_repo.update_batch(conn, batch, _TASK.task_id, status="done", stage="done",
+                                page_done=_TASK.pages, detail_done=len(_ITEMS),
+                                items_count=len(_ITEMS), finished_at=stamp)
 
     print(f"演示数据已生成：{len(_ITEMS)} 个商品 × {len(batches)} 个批次（批次号以 _demo 结尾）")
-    print("现在运行：streamlit run app/streamlit_app.py")
+    print("现在运行：start.bat 打开页面查看")

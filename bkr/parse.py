@@ -9,6 +9,14 @@ from typing import Optional
 
 _ITEM_ID_RE = re.compile(r"[?&]id=(\d+)")
 _PRICE_RE = re.compile(r"[¥￥]\s*(\d+(?:\.\d+)?)")
+# 1688 详情把价格拆成多个 span（"¥" + "0" + ".75"），innerText 变成
+# "¥\n0\n.75"，_PRICE_RE 只吃到 "¥\n0" 会丢掉小数；这里先合并成 "¥0.75"。
+_PRICE_SPLIT_RE = re.compile(r"[¥￥](\s*)(\d+)\s*\n\s*\.\s*(\d+)")
+
+
+def _merge_split_price(text: str) -> str:
+    """把 "¥\\n0\\n.75" 形态的价格合并成 "¥0.75"，其余文本原样保留。"""
+    return _PRICE_SPLIT_RE.sub(lambda m: f"¥{m.group(1)}{m.group(2)}.{m.group(3)}", text)
 _COUPON_RE = re.compile(r"券后(?:价)?\s*[¥￥]?\s*(\d+(?:\.\d+)?)")
 _TO_HAND_RE = re.compile(r"到手价\s*[¥￥]?\s*(\d+(?:\.\d+)?)")
 _PRICE_TO_HAND_RE = re.compile(r"[¥￥]\s*(\d+(?:\.\d+)?)\s*(?:补贴)?到手价")
@@ -71,10 +79,11 @@ def parse_count(text) -> Optional[int]:
 
 
 def parse_price(text) -> Optional[float]:
-    """取文本中第一个 ¥/￥ 后的价格。"""
+    """取文本中第一个 ¥/￥ 后的价格（兼容 1688 的「¥ / 0 / .75」跨行拆分）。"""
     if not text:
         return None
-    m = _PRICE_RE.search(str(text))
+    normalized = _merge_split_price(str(text))
+    m = _PRICE_RE.search(normalized)
     return float(m.group(1)) if m else None
 
 

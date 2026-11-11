@@ -2,7 +2,8 @@
 import os
 import tempfile
 
-from bkr import db
+from bkr import database
+from bkr.repositories import platform_auth_repo, product_repo
 from bkr.config import load_task, profile_dir_for
 from bkr.pace import get_pace
 from bkr.platforms import alibaba, pinduoduo
@@ -121,13 +122,13 @@ def test_profile_dir_for():
 def test_platform_auth_db():
     tmp = tempfile.mkdtemp()
     path = os.path.join(tmp, "t.db")
-    conn = db.connect(path)
+    conn = database.connect(path)
     try:
-        assert db.get_platform_auth(conn, "tmall") is None
-        db.set_platform_auth(conn, "tmall", True)
-        assert db.get_platform_auth(conn, "tmall") is True
-        db.set_platform_auth(conn, "tmall", False, "窗口关闭")
-        assert db.get_platform_auth(conn, "tmall") is False
+        assert platform_auth_repo.get_auth(conn, "tmall") is None
+        platform_auth_repo.set_auth(conn, "tmall", True)
+        assert platform_auth_repo.get_auth(conn, "tmall") is True
+        platform_auth_repo.set_auth(conn, "tmall", False, "窗口关闭")
+        assert platform_auth_repo.get_auth(conn, "tmall") is False
     finally:
         conn.close()
         os.remove(path)
@@ -146,11 +147,11 @@ def test_proxied_image():
 def test_product_platform_isolation():
     tmp = tempfile.mkdtemp()
     path = os.path.join(tmp, "t.db")
-    conn = db.connect(path)
+    conn = database.connect(path)
     try:
         base = {"item_id": "1", "title": "a"}
-        db.upsert_product(conn, dict(base, platform="tmall"))
-        db.upsert_product(conn, dict(base, platform="1688", title="b"))
+        product_repo.upsert_product(conn, dict(base, platform="tmall"))
+        product_repo.upsert_product(conn, dict(base, platform="1688", title="b"))
         rows = conn.execute(
             "SELECT platform, title FROM product WHERE item_id='1' ORDER BY platform"
         ).fetchall()

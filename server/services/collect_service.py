@@ -1,8 +1,7 @@
-"""后台任务：登录前置检查 + 并行采集 worker + SSE 事件。"""
+"""采集服务：登录前置检查 → 并行 worker 采集 → 状态机 / 失败确认 / 结果保留或丢弃。"""
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import subprocess
 import sys
@@ -11,9 +10,16 @@ import time
 import uuid
 from datetime import datetime
 
-from bkr import db
+from bkr import database
 from bkr.auth import is_authorized, login_site
 from bkr.config import DATA_DIR, ROOT, Task, profile_dir_for, state_path_for
+from bkr.repositories import (
+    batch_repo,
+    platform_auth_repo,
+    product_repo,
+    snapshot_repo,
+    task_repo,
+)
 
 
 class BusyError(RuntimeError):
@@ -45,6 +51,8 @@ class EventBus:
         loop = self._loop
         if loop is None or not loop.is_running():
             return
+        import json
+
         data = json.dumps(payload, ensure_ascii=False, default=str)
         with self._lock:
             subs = list(self._subs)
@@ -92,6 +100,8 @@ class JobManager:
         self._procs: dict[str, list[subprocess.Popen]] = {}
         self._active_jobs: set[str] = set()
 
+    # ---------- 任务注册 ----------
+
     def get(self, job_id: str) -> dict | None:
         return self.jobs.get(job_id)
 
@@ -111,6 +121,8 @@ class JobManager:
             "detail_total": 0,
             "auth_statuses": [],
             "platforms_status": [],
+            "confirm_needed": False,
+            "confirm_state": None,
             "message": "",
             "error": None,
             "started_at": _now(),
@@ -146,12 +158,9 @@ class JobManager:
             raise BusyError("已有一个采集/登录任务在运行，请等待完成")
         # 先把任务写入 dim_task：worker 是独立子进程，启动时要按 task_id 从库里加载
         try:
-            conn = db.connect()
-            try:
+            with database.connection() as conn:
                 for t in tasks:
-                    db.upsert_task(conn, t)
-            finally:
-                conn.close()
+                    task_repo.upsert_task(conn, t)
         except Exception as exc:  # noqa: BLE001
             print(f"[job] 写入任务配置失败：{exc}")
         first = tasks[0]
@@ -191,6 +200,8 @@ class JobManager:
         ).start()
         return job
 
+    # ---------- 登录前置检查 ----------
+
     def _auth_statuses(self, tasks: list[Task]) -> list[dict]:
         out = []
         for t in tasks:
@@ -217,11 +228,8 @@ class JobManager:
                 elif status == "unauthorized":
                     job["message"] = f"{label} 未授权：{reason or '请重新登录'}"
         try:
-            conn = db.connect()
-            try:
-                db.set_platform_auth(conn, platform, status == "authorized", reason)
-            finally:
-                conn.close()
+            with database.connection() as conn:
+                platform_auth_repo.set_auth(conn, platform, status == "authorized", reason)
         except Exception:
             pass
         self._publish(job)
@@ -295,11 +303,8 @@ class JobManager:
             job["auth_statuses"] = self._auth_statuses(tasks)
             for s in job["auth_statuses"]:
                 try:
-                    conn = db.connect()
-                    try:
-                        db.set_platform_auth(conn, s["platform"], s["status"] == "authorized")
-                    finally:
-                        conn.close()
+                    with database.connection() as conn:
+                        platform_auth_repo.set_auth(conn, s["platform"], s["status"] == "authorized")
                 except Exception:
                     pass
             self._publish(job)
@@ -326,9 +331,7 @@ class JobManager:
                 elif reason == "cancelled":
                     break
                 else:
-                    msg = {"closed": "浏览器窗口被关闭", "timeout": "登录超时"}.get(
-                        reason, reason
-                    )
+                    msg = {"closed": "浏览器窗口被关闭", "timeout": "登录超时"}.get(reason, reason)
                     self._set_auth(job, task.platform, "unauthorized", msg)
                     break
 
@@ -363,6 +366,8 @@ class JobManager:
             self._procs.pop(job["id"], None)
             self._active_jobs.discard(job["id"])
 
+    # ---------- 并行采集 ----------
+
     def _collect_phase(
         self, job: dict, tasks: list[Task], batch: str, resume: bool = False
     ) -> None:
@@ -372,13 +377,15 @@ class JobManager:
         cancel = self._cancels.get(job["id"]) or threading.Event()
 
         def snapshot() -> list[dict]:
-            conn = db.connect()
-            try:
-                out = []
+            out = []
+            with database.connection() as conn:
                 for t in tasks:
-                    row = db.get_batch(conn, batch, t.task_id) or {}
+                    row = batch_repo.get_batch(conn, batch, t.task_id) or {}
                     status = row.get("status") or "waiting"
-                    if status not in ("running", "paused_captcha", "failed", "done", "cancelled"):
+                    if status not in (
+                        "running", "paused_captcha", "failed", "done",
+                        "cancelled", "pending_confirm",
+                    ):
                         status = "waiting"
                     out.append({
                         "task_id": t.task_id,
@@ -393,9 +400,7 @@ class JobManager:
                         "detail_total": t.detail_top,
                         "error": row.get("error"),
                     })
-                return out
-            finally:
-                conn.close()
+            return out
 
         def aggregate(statuses: list[dict]) -> str:
             states = [s["status"] for s in statuses]
@@ -405,7 +410,7 @@ class JobManager:
                 return "paused_captcha"
             if any(s in ("running", "waiting") for s in states):
                 return "running"
-            if any(s == "failed" for s in states):
+            if any(s in ("failed", "pending_confirm") for s in states):
                 return "failed"
             if states and all(s == "done" for s in states):
                 return "done"
@@ -424,6 +429,7 @@ class JobManager:
                     parts.append(f"{label} " + {
                         "waiting": "等待", "paused_captcha": "待人工处理",
                         "failed": "失败", "done": "已完成", "cancelled": "已取消",
+                        "pending_confirm": "待确认",
                     }.get(st, st))
             return "；".join(parts)
 
@@ -432,6 +438,22 @@ class JobManager:
             job["status"] = aggregate(statuses)
             job["error"] = next((s["error"] for s in statuses if s["error"]), None)
             job["message"] = message(statuses)
+            # 任一平台失败且用户尚未确认 → 弹「是否保存已采数据」，失败平台标为待确认
+            if (
+                any(s["status"] == "failed" for s in statuses)
+                and not job.get("confirm_state")
+                and not job.get("confirm_needed")
+            ):
+                job["confirm_needed"] = True
+                try:
+                    with database.connection() as conn:
+                        for s in statuses:
+                            if s["status"] == "failed":
+                                batch_repo.update_batch(
+                                    conn, batch, s["task_id"], status="pending_confirm"
+                                )
+                except Exception:
+                    pass
             current = next(
                 (s for s in statuses if s["status"] in ("running", "paused_captcha")),
                 statuses[0] if statuses else None,
@@ -484,8 +506,10 @@ class JobManager:
                 log_fh = open(log_path, "w", encoding="utf-8")
                 task_logs[task.task_id] = str(log_path)
                 print(f"[job] 启动 worker：{task.name}（profile={task.platform}，日志 {log_path}）")
-                proc = subprocess.Popen(cmd, cwd=str(ROOT), env=env,
-                                        stdout=log_fh, stderr=subprocess.STDOUT)
+                proc = subprocess.Popen(
+                    cmd, cwd=str(ROOT), env=env,
+                    stdout=log_fh, stderr=subprocess.STDOUT,
+                )
                 procs.append((proc, log_fh, str(log_path)))
                 proc_list.append(proc)
             while True:
@@ -524,32 +548,28 @@ class JobManager:
             mt.join(timeout=3)
             statuses = snapshot()
             # 结束时把仍为 running 的任务落状态：取消/失败（带日志路径）
-            conn = db.connect()
-            try:
+            with database.connection() as conn:
                 for s in statuses:
-                    if s["status"] == "running":
+                    if s["status"] != "running":
+                        continue
+                    if cancel.is_set():
+                        batch_repo.update_batch(
+                            conn, batch, s["task_id"], status="cancelled",
+                            error="已取消（用户结束任务）",
+                        )
+                    else:
                         log_path = task_logs.get(s["task_id"], "")
-                        if cancel.is_set():
-                            db.set_batch(
-                                conn, batch, s["task_id"], status="cancelled",
-                                error="已取消（用户结束任务）",
-                            )
-                        else:
-                            db.set_batch(
-                                conn, batch, s["task_id"], status="failed",
-                                error=f"worker 异常退出（详见日志 {log_path}）",
-                            )
-                conn.commit()
-            finally:
-                conn.close()
+                        batch_repo.update_batch(
+                            conn, batch, s["task_id"], status="failed",
+                            error=f"worker 异常退出（详见日志 {log_path}）",
+                        )
             if cancel.is_set():
-                # 兜底清理该批次各平台的 Edge 进程，避免取消后浏览器残留
+                # 兜底清理该批次各平台的 Edge/Chrome 进程，避免取消后浏览器残留
                 try:
                     from bkr.browser import kill_profile_browsers
-                    from bkr.config import profile_dir_for as _profile_dir_for
 
                     for t in tasks:
-                        kill_profile_browsers(_profile_dir_for(t.platform))
+                        kill_profile_browsers(profile_dir_for(t.platform))
                 except Exception:
                     pass
             statuses = snapshot()
@@ -564,7 +584,7 @@ class JobManager:
                 job["message"] = job["error"]
             self._publish(job)
 
-    # ---------- 取消 / 丢弃结果 ----------
+    # ---------- 取消 / 失败确认 / 丢弃结果 ----------
 
     def cancel(self, job_id: str) -> tuple[bool, str]:
         job = self.jobs.get(job_id)
@@ -600,10 +620,56 @@ class JobManager:
             pass
         return True, "正在结束"
 
-    def discard(self, job_id: str) -> tuple[bool, str]:
-        """用户选择“不保存”后删除本次批次的采集结果。"""
+    def _delete_batch_data(self, batch: str, task_ids: list[str]) -> None:
+        """删除指定批次各平台的采集结果（快照、批次记录、孤儿商品与 raw 目录）。"""
         import shutil
 
+        with database.connection() as conn:
+            snapshot_repo.delete_by_batch_tasks(conn, batch, task_ids)
+            batch_repo.delete_by_batch_tasks(conn, batch, task_ids)
+            product_repo.delete_orphans(conn)
+            conn.commit()
+            remain = snapshot_repo.batch_has_rows(conn, batch)
+        if not remain:
+            shutil.rmtree(DATA_DIR / "raw" / batch, ignore_errors=True)
+
+    def confirm(self, job_id: str, keep: bool) -> tuple[bool, str]:
+        """采集出现失败时的确认：keep=True 保留已采数据继续采集；False 中断并丢弃。"""
+        job = self.jobs.get(job_id)
+        if not job:
+            return False, "任务不存在"
+        if job.get("confirm_state") in ("keep", "discarded"):
+            return False, "本次确认已经处理过"
+        batch = job.get("batch")
+        task_ids = job.get("_task_ids") or []
+        if not batch or not task_ids:
+            return False, "批次信息缺失"
+
+        if keep:
+            # 保留已采数据（失败平台恢复为 failed，可续采），其余平台继续
+            with database.connection() as conn:
+                batch_repo.update_status_for_tasks(
+                    conn, batch, task_ids, status="failed", only="pending_confirm"
+                )
+            job["confirm_state"] = "keep"
+            job["confirm_needed"] = False
+            job["message"] = "已确认保存已采数据，其余平台继续采集"
+            self._publish(job)
+            return True, "已保存"
+
+        # 不保存：立即中断全部平台并删除已采数据
+        self.cancel(job_id)
+        self._delete_batch_data(batch, task_ids)
+        job["confirm_state"] = "discarded"
+        job["confirm_needed"] = False
+        job["discarded"] = True
+        job["status"] = "cancelled"
+        job["message"] = "已中断采集，本次结果不保存"
+        self._publish(job)
+        return True, "已中断并丢弃"
+
+    def discard(self, job_id: str) -> tuple[bool, str]:
+        """用户选择“不保存”后删除本次批次的采集结果。"""
         job = self.jobs.get(job_id)
         if not job:
             return False, "任务不存在"
@@ -613,39 +679,7 @@ class JobManager:
         task_ids = job.get("_task_ids") or []
         if not batch or not task_ids:
             return False, "批次信息缺失"
-        conn = db.connect()
-        try:
-            marks = ",".join("?" for _ in task_ids)
-            conn.execute(
-                f"DELETE FROM fact_snapshot WHERE batch=? AND task_id IN ({marks})",
-                (batch, *task_ids),
-            )
-            conn.execute(
-                f"DELETE FROM batch_run WHERE batch=? AND task_id IN ({marks})",
-                (batch, *task_ids),
-            )
-            conn.execute(
-                """DELETE FROM product
-                   WHERE NOT EXISTS (
-                     SELECT 1 FROM fact_snapshot s
-                     WHERE s.item_id = product.item_id AND s.platform = product.platform
-                   )"""
-            )
-            conn.commit()
-        finally:
-            conn.close()
-        try:
-            remain = db.connect()
-            try:
-                has = remain.execute(
-                    "SELECT 1 FROM fact_snapshot WHERE batch=? LIMIT 1", (batch,)
-                ).fetchone()
-            finally:
-                remain.close()
-            if not has:
-                shutil.rmtree(DATA_DIR / "raw" / batch, ignore_errors=True)
-        except Exception:
-            pass
+        self._delete_batch_data(batch, task_ids)
         job["discarded"] = True
         job["message"] = "本次结果已丢弃（未保存）"
         self._publish(job)
@@ -674,11 +708,11 @@ class JobManager:
 
             profile = job.get("profile")
             site = job.get("site") or "taobao"
-            pdir = profile_dir_for(profile)
-
             with browser_runtime() as p:
-                ctx = launch_context(p, profile_dir=pdir, kill_stale=True,
-                                 platform=(site if site == "pdd" else None))
+                ctx = launch_context(
+                    p, profile_dir=profile_dir_for(profile), kill_stale=True,
+                    platform=(site if site == "pdd" else None),
+                )
                 try:
                     ok, reason = wait_for_login(ctx, site)
                     if ok:
@@ -688,28 +722,14 @@ class JobManager:
                             pass
                         job["status"] = "done"
                         job["message"] = f"{site} 登录成功"
-                        try:
-                            conn = db.connect()
-                            try:
-                                db.set_platform_auth(conn, profile, True)
-                            finally:
-                                conn.close()
-                        except Exception:
-                            pass
+                        self._save_login(profile, True)
                     else:
                         job["status"] = "timeout" if reason == "timeout" else "failed"
                         job["message"] = {
                             "closed": f"{site} 登录窗口被关闭",
                             "timeout": f"{site} 登录超时，请重试",
                         }.get(reason, f"登录失败：{reason}")
-                        try:
-                            conn = db.connect()
-                            try:
-                                db.set_platform_auth(conn, profile, False, job["message"])
-                            finally:
-                                conn.close()
-                        except Exception:
-                            pass
+                        self._save_login(profile, False, job["message"])
                 finally:
                     close_context(ctx)
         except Exception as exc:  # noqa: BLE001
@@ -720,6 +740,14 @@ class JobManager:
             job["finished_at"] = _now()
             self._publish(job)
             self._run_lock.release()
+
+    @staticmethod
+    def _save_login(profile: str | None, ok: bool, note: str | None = None) -> None:
+        try:
+            with database.connection() as conn:
+                platform_auth_repo.set_auth(conn, profile or "tmall", ok, note)
+        except Exception:
+            pass
 
 
 manager = JobManager()

@@ -1,4 +1,4 @@
-"""大佬分析接口：创建运行、查询、取消、删除、导出。"""
+"""控制层：大佬分析接口（创建运行、查询、取消、删除、导出）。"""
 from __future__ import annotations
 
 import re
@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from bkr.expert.service import service
+from server.services.expert_service import service
 
 router = APIRouter()
 
@@ -37,7 +37,7 @@ def _safe_name(text: str) -> str:
 @router.post("/expert/runs")
 def create_run(req: RunRequest):
     try:
-        run = service.create(
+        return service.create(
             title=req.title,
             keyword=req.keyword,
             sources=[s.model_dump() for s in req.sources],
@@ -46,7 +46,6 @@ def create_run(req: RunRequest):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return run
 
 
 @router.get("/expert/runs")
@@ -66,8 +65,7 @@ def get_run(run_id: str):
 def cancel_run(run_id: str):
     if not service.get(run_id):
         raise HTTPException(status_code=404, detail="运行不存在")
-    ok = service.cancel(run_id)
-    if not ok:
+    if not service.cancel(run_id):
         raise HTTPException(status_code=400, detail="任务已结束，无法取消")
     return {"ok": True}
 
@@ -87,7 +85,7 @@ def export_run(run_id: str):
     report = run.get("final_report_md") or ""
     if not report:
         raise HTTPException(status_code=400, detail="报告尚未生成")
-    filename = f"大佬分析_{_safe_name(run.get('title') or '')}_{run.get('created_at', '')[:10]}.md"
+    filename = f"大佬分析_{_safe_name(run.get('title') or '')}_{str(run.get('created_at') or '')[:10]}.md"
     return StreamingResponse(
         iter([report]),
         media_type="text/markdown; charset=utf-8",

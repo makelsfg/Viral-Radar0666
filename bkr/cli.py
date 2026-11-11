@@ -4,9 +4,10 @@ from __future__ import annotations
 import argparse
 import csv
 
-from . import db as dbm
+from . import database
 from .config import DATA_DIR, TASKS_DIR, ConfigError, load_task, load_tasks
 from .parse import parse_price
+from .repositories import snapshot_repo
 
 
 def _find_task(task_id: str):
@@ -52,29 +53,20 @@ def cmd_collect(args) -> None:
 
 
 def cmd_export(args) -> None:
-    conn = dbm.connect()
-    batches = dbm.distinct_batches(conn, args.task)
-    if not batches:
-        raise ConfigError(f"任务 {args.task} 还没有任何批次数据，先运行 collect")
-    batch = batches[0] if args.batch in (None, "latest") else args.batch
-
-    where = "s.task_id=? AND s.batch=?"
-    if getattr(args, "only_detail", False):
-        where += " AND s.is_detail=1"
-    rows = conn.execute(
-        f"""SELECT s.item_id, s.platform,
-                   COALESCE(p.title, s.title) AS title,
-                   s.price_final, s.price_text, s.sold_text, s.cart_text,
-                   COALESCE(p.shop_name, s.shop_name) AS shop_name,
-                   p.shop_rating, p.positive_rate, p.sku_names, p.params_json,
-                   COALESCE(p.image_url, s.image_url) AS image_url,
-                   p.product_url, s.captured_at
-            FROM fact_snapshot s
-            LEFT JOIN product p ON p.item_id = s.item_id AND p.platform = s.platform
-            WHERE {where}
-            ORDER BY COALESCE(s.sold_lb, -1) DESC, s.rank ASC""",
-        (args.task, batch),
-    ).fetchall()
+    conn = database.connect()
+    try:
+        batches = snapshot_repo.list_batches(conn, args.task)
+        if not batches:
+            raise ConfigError(f"任务 {args.task} 还没有任何批次数据，先运行 collect")
+        batch = batches[0] if args.batch in (None, "latest") else args.batch
+        rows = snapshot_repo.list_products(
+            conn,
+            batch,
+            task_id=args.task,
+            only_detail=bool(getattr(args, "only_detail", False)),
+        )
+    finally:
+        conn.close()
 
     out_dir = DATA_DIR / "export"
     out_dir.mkdir(parents=True, exist_ok=True)

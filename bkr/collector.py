@@ -7,7 +7,7 @@ import random
 import time
 from datetime import datetime
 
-from . import db
+from . import database
 from .browser import (
     BlockedError,
     EmptyResultError,
@@ -19,6 +19,7 @@ from .browser import (
 from .config import RAW_DIR
 from .pace import get_pace
 from .parse import parse_price, same_search_url as _same_search_url
+from .repositories import batch_repo, platform_auth_repo, product_repo, snapshot_repo, task_repo
 
 
 def _platform_adapters(platform: str):
@@ -87,7 +88,7 @@ def _enrich_with_apify(conn, task, batch: str, pending: list[dict], raw_dir) -> 
         (raw_dir / f"{iid}.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        db.upsert_product(conn, {
+        product_repo.upsert_product(conn, {
             "platform": task.platform,
             "item_id": iid,
             "title": rec["title"] or r.get("title") or "",
@@ -103,9 +104,9 @@ def _enrich_with_apify(conn, task, batch: str, pending: list[dict], raw_dir) -> 
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "first_seen_at": datetime.now().isoformat(timespec="seconds"),
         })
-        db.set_snapshot_detail(conn, task.task_id, iid, batch, price_final)
+        snapshot_repo.set_detail(conn, task.task_id, iid, batch, price_final)
         found += 1
-        db.set_batch(conn, batch, task.task_id, stage="detail", detail_done=found)
+        batch_repo.update_batch(conn, batch, task.task_id, stage="detail", detail_done=found)
 
     print(f"  [apify] 补全 {found}/{len(pending)} 个详情")
     if found == 0:
@@ -155,7 +156,7 @@ def _collect_details_by_click(
                     json.dumps(detail, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
 
-                db.upsert_product(conn, {
+                product_repo.upsert_product(conn, {
                     "platform": task.platform,
                     "item_id": iid,
                     "title": detail["title"] or r.get("title") or "",
@@ -170,14 +171,14 @@ def _collect_details_by_click(
                     "updated_at": datetime.now().isoformat(timespec="seconds"),
                     "first_seen_at": datetime.now().isoformat(timespec="seconds"),
                 })
-                db.set_snapshot_detail(
+                snapshot_repo.set_detail(
                     conn, task.task_id, iid, batch, price_final,
                     sold_text=detail["sold_text"], sold_lb=detail["sold_lb"],
                     cart_text=detail["cart_text"], cart_lb=detail["cart_lb"],
                 )
                 processed += 1
-                db.set_batch(conn, batch, task.task_id, stage="detail",
-                             detail_done=done_count + processed)
+                batch_repo.update_batch(conn, batch, task.task_id, stage="detail",
+                                        detail_done=done_count + processed)
 
                 # 拟人节奏（按预设）：基础间隔 + 周期性休息
                 pause = random.uniform(pace["detail_lo"], pace["detail_hi"])
@@ -197,18 +198,18 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
         task._batch = batch  # 供采集监督 Agent 记录 agent_run
     except Exception:
         pass
-    conn = db.connect()
-    db.upsert_task(conn, task)
+    conn = database.connect()
+    task_repo.upsert_task(conn, task)
 
-    row = db.get_batch(conn, batch, task.task_id)
+    row = batch_repo.get_batch(conn, batch, task.task_id)
     if row and row["status"] == "done" and int(row.get("items_count") or 0) > 0 and not resume:
         print(f"[{task.task_id}] 批次 {batch} 已完成，跳过（如需重跑请换批次号）")
         return
 
-    db.ensure_batch(conn, batch, task.task_id)
+    batch_repo.ensure_batch(conn, batch, task.task_id)
     if not resume:
-        db.reset_batch_progress(conn, batch, task.task_id)
-    db.set_batch(
+        batch_repo.reset_progress(conn, batch, task.task_id)
+    batch_repo.update_batch(
         conn, batch, task.task_id,
         status="running", error=None,
         config_json=json.dumps({
@@ -233,7 +234,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
         with browser_runtime() as p:
             ctx = launch_context(p, platform=task.platform)
             try:
-                row = db.get_batch(conn, batch, task.task_id) or {}
+                row = batch_repo.get_batch(conn, batch, task.task_id) or {}
                 page_done = int(row.get("page_done") or 0)
 
                 # 阶段一：搜索页
@@ -242,7 +243,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                     cards = collect_pages_fn(ctx, task, start_page=1)
                     stamp = datetime.now().isoformat(timespec="seconds")
                     for c in cards:
-                        db.upsert_snapshot(
+                        snapshot_repo.upsert_snapshot(
                             conn, task.task_id, c["item_id"], batch, stamp,
                             c["rank"], c["price_text"], c["sold_text"], c["sold_lb"], None, None,
                             title=c["title"], image_url=c["image_url"],
@@ -250,7 +251,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                             platform=task.platform,
                         )
                     conn.commit()
-                    db.set_batch(
+                    batch_repo.update_batch(
                         conn, batch, task.task_id,
                         stage="detail", page_done=task.pages, items_count=len(cards),
                     )
@@ -259,7 +260,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                     print(f"[{task.task_id}] 搜索页已完成，跳过")
 
                 # 阶段二：详情（本地点击或 Apify 通道）
-                candidates = db.list_candidates(
+                candidates = snapshot_repo.list_candidates(
                     conn, task.task_id, batch, task.detail_top, order=task.detail_order
                 )
                 pending = [r for r in candidates if not r["is_detail"]]
@@ -286,10 +287,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                 if pending:
                     today = datetime.now().strftime("%Y-%m-%d")
                     try:
-                        today_details = conn.execute(
-                            "SELECT COUNT(*) FROM fact_snapshot WHERE is_detail=1 AND captured_at LIKE ?",
-                            (today + "%",),
-                        ).fetchone()[0]
+                        today_details = snapshot_repo.count_detail_today(conn, today)
                     except Exception:
                         today_details = 0
                     if today_details >= 10:
@@ -313,13 +311,13 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
                         f"剩余 {pdd_truncated} 个候选；请至少 {_PDD_COOLDOWN} 分钟后"
                         "点「继续采集」续采（或命令行 --resume）"
                     )
-                    db.set_batch(
+                    batch_repo.update_batch(
                         conn, batch, task.task_id,
                         status="paused_captcha", stage="detail", error=msg,
                     )
                     print(f"[{task.task_id}] {msg}")
                 else:
-                    db.set_batch(
+                    batch_repo.update_batch(
                         conn, batch, task.task_id,
                         status="done", stage="done",
                         finished_at=datetime.now().isoformat(timespec="seconds"),
@@ -328,7 +326,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
             finally:
                 close_context(ctx)
     except EmptyResultError as e:
-        db.set_batch(conn, batch, task.task_id, status="failed", error=str(e))
+        batch_repo.update_batch(conn, batch, task.task_id, status="failed", error=str(e))
         print(f"\n[{task.task_id}] 采集失败：{e}")
         print("排查顺序：")
         print("  1) 确认已登录：python -m bkr.cli login")
@@ -339,17 +337,16 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
         msg = str(e)
         if isinstance(e, LoginError):
             try:
-                db.set_platform_auth(conn, task.platform, False, msg)
-                conn.commit()
+                platform_auth_repo.set_auth(conn, task.platform, False, msg)
             except Exception:
                 pass
-        db.set_batch(conn, batch, task.task_id, status="paused_captcha", error=msg)
+        batch_repo.update_batch(conn, batch, task.task_id, status="paused_captcha", error=msg)
         print(f"\n[{task.task_id}] 已暂停：{msg}")
         print("处理完成后执行：")
         print(f"  python -m bkr.cli collect --task {task.task_id} --batch {batch} --resume")
         raise SystemExit(2)
     except RuntimeError as e:
-        db.set_batch(conn, batch, task.task_id, status="failed", error=str(e))
+        batch_repo.update_batch(conn, batch, task.task_id, status="failed", error=str(e))
         print(f"\n[{task.task_id}] 采集失败：{e}")
         raise SystemExit(1)
     except Exception as exc:  # noqa: BLE001
@@ -359,7 +356,7 @@ def run_task(task, batch: str | None = None, resume: bool = False) -> None:
         print(tb)
         msg = f"{type(exc).__name__}: {exc}"
         try:
-            db.set_batch(conn, batch, task.task_id, status="failed", error=msg)
+            batch_repo.update_batch(conn, batch, task.task_id, status="failed", error=msg)
         except Exception:
             pass
         print(f"\n[{task.task_id}] 采集异常：{msg}")

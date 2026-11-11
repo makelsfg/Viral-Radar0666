@@ -1,5 +1,7 @@
 """FastAPI 入口：API + 前端静态托管 + 一键启动。
 
+分层：server/api（控制层） → server/services（服务层） → bkr/repositories（数据访问层）
+
 运行：python -m server.main
 """
 from __future__ import annotations
@@ -15,8 +17,24 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from bkr.config import ROOT
-from server.jobs import bus
-from server.routes import analysis, collect, data, env, events, expert, hotwords
+from server.api import (
+    analysis_api,
+    collect_api,
+    data_api,
+    env_api,
+    events_api,
+    expert_api,
+)
+from server.services.collect_service import bus
+
+ROUTERS = (
+    events_api,
+    env_api,
+    data_api,
+    collect_api,
+    analysis_api,
+    expert_api,
+)
 
 
 @asynccontextmanager
@@ -25,16 +43,10 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="爆款雷达", version="0.17.7", lifespan=lifespan)
+app = FastAPI(title="爆款雷达", version="0.17.8", lifespan=lifespan)
 
-app.include_router(events.router, prefix="/api")
-app.include_router(env.router, prefix="/api")
-app.include_router(data.router, prefix="/api")
-app.include_router(collect.router, prefix="/api")
-app.include_router(analysis.router, prefix="/api")
-app.include_router(hotwords.router, prefix="/api")
-app.include_router(expert.router, prefix="/api")
-
+for module in ROUTERS:
+    app.include_router(module.router, prefix="/api")
 
 DIST = ROOT / "web" / "dist"
 if DIST.exists():

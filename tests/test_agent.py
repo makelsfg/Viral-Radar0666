@@ -1,12 +1,12 @@
 """采集监督 Agent 单测（不访问网络/浏览器）。"""
 import os
 import tempfile
-import types
 
-from bkr import db
-from bkr.agent import policy, store
+from bkr import database
+from bkr.agent import policy
 from bkr.agent.observe import classify
 from bkr.agent.replay import replay
+from bkr.repositories import agent_repo
 
 
 def _sig(**over):
@@ -72,31 +72,24 @@ def test_extract_json_fences():
 
 
 def test_store_roundtrip():
-    tmp = tempfile.mkdtemp()
-    path = os.path.join(tmp, "t.db")
-    conn = db.connect(path)
-    conn.close()
-    orig = store.db
-    store.db = types.SimpleNamespace(connect=lambda: db.connect(path))
+    path = os.path.join(tempfile.mkdtemp(), "t.db")
     try:
-        store.start_run("r1", "b1", "pdd", "t1")
-        store.add_step(
-            "r1", 1, "abc",
-            {"state": "slider", "url": "u", "signals": {}, "budget": {}},
-            "wait_human", {"kind": "slider"}, {"ok": True}, "规则",
-        )
-        store.finish_run("r1", "success", 1, 0, "恢复成功")
-        store.mark_batch_recovered("b1", "t1")
-        c = db.connect(path)
-        try:
-            run = c.execute("SELECT status, steps FROM agent_run WHERE run_id='r1'").fetchone()
+        with database.connection(path) as conn:
+            agent_repo.start_run(conn, "r1", "b1", "pdd", "t1")
+            agent_repo.add_step(
+                conn, "r1", 1, "abc",
+                {"state": "slider", "url": "u", "signals": {}, "budget": {}},
+                "wait_human", {"kind": "slider"}, {"ok": True}, "规则",
+            )
+            agent_repo.finish_run(conn, "r1", "success", 1, 0, "恢复成功")
+            agent_repo.mark_batch_recovered(conn, "b1", "t1")
+            run = conn.execute(
+                "SELECT status, steps FROM agent_run WHERE run_id='r1'"
+            ).fetchone()
             assert (run["status"], run["steps"]) == ("success", 1)
-            step = c.execute("SELECT tool FROM agent_step WHERE run_id='r1'").fetchone()
+            step = conn.execute("SELECT tool FROM agent_step WHERE run_id='r1'").fetchone()
             assert step["tool"] == "wait_human"
-        finally:
-            c.close()
     finally:
-        store.db = orig
         os.remove(path)
 
 def test_fiber_extractor_markers():

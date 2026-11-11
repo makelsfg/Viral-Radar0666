@@ -2,8 +2,9 @@
 import os
 import tempfile
 
-from bkr import db
+from bkr import database
 from bkr.collector import _price_guard, _same_search_url
+from bkr.repositories import snapshot_repo
 
 
 def test_price_guard_treats_zero_as_missing():
@@ -33,23 +34,23 @@ def test_same_search_url_1688_gbk():
 def test_set_snapshot_detail_cart_and_sold_merge():
     tmp = tempfile.mkdtemp()
     path = os.path.join(tmp, "t.db")
-    conn = db.connect(path)
+    conn = database.connect(path)
     try:
-        db.upsert_snapshot(conn, "t1", "100", "b1", "2026-10-31T21:00:00", 1,
-                           "¥10.00", "已售 100+", 100, None, None, platform="tmall")
+        snapshot_repo.upsert_snapshot(conn, "t1", "100", "b1", "2026-10-31T21:00:00", 1,
+                                      "¥10.00", "已售 100+", 100, None, None, platform="tmall")
         # 列表已有已售值时不覆盖；加购以详情为准写入
-        db.set_snapshot_detail(conn, "t1", "100", "b1", 9.9,
-                               cart_text="1千人加购", cart_lb=1000,
-                               sold_text="已售 300+", sold_lb=300)
+        snapshot_repo.set_detail(conn, "t1", "100", "b1", 9.9,
+                                 cart_text="1千人加购", cart_lb=1000,
+                                 sold_text="已售 300+", sold_lb=300)
         r = conn.execute("SELECT * FROM fact_snapshot WHERE task_id='t1'").fetchone()
         assert r["is_detail"] == 1 and r["price_final"] == 9.9
         assert r["cart_text"] == "1千人加购" and r["cart_lb"] == 1000
         assert r["sold_lb"] == 100
         # 列表缺失已售时，用详情补齐
-        db.upsert_snapshot(conn, "t1", "101", "b1", "2026-10-31T21:00:00", 2,
-                           "¥5.00", None, None, None, None, platform="tmall")
-        db.set_snapshot_detail(conn, "t1", "101", "b1", 5.0,
-                               sold_text="已售 500+", sold_lb=500)
+        snapshot_repo.upsert_snapshot(conn, "t1", "101", "b1", "2026-10-31T21:00:00", 2,
+                                      "¥5.00", None, None, None, None, platform="tmall")
+        snapshot_repo.set_detail(conn, "t1", "101", "b1", 5.0,
+                                 sold_text="已售 500+", sold_lb=500)
         r2 = conn.execute("SELECT * FROM fact_snapshot WHERE item_id='101'").fetchone()
         assert r2["sold_lb"] == 500
     finally:

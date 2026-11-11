@@ -7,6 +7,7 @@ import {
   Col,
   Collapse,
   Divider,
+  Drawer,
   Empty,
   Input,
   InputNumber,
@@ -22,6 +23,7 @@ import {
 import {
   DeleteOutlined,
   DownloadOutlined,
+  FileSearchOutlined,
   PlusOutlined,
   StopOutlined,
 } from '@ant-design/icons'
@@ -29,7 +31,14 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { api } from '../api'
 import { useSse } from '../sse'
-import type { ExpertReviewIssue, ExpertRound, ExpertRun, ExpertSource, TaskInfo } from '../types'
+import type {
+  ExpertEvidence,
+  ExpertReviewIssue,
+  ExpertRound,
+  ExpertRun,
+  ExpertSource,
+  TaskInfo,
+} from '../types'
 
 const STATUS_TEXT: Record<string, string> = {
   running: '生成中',
@@ -74,6 +83,33 @@ function roundGroups(rounds: ExpertRound[] = []) {
     map.set(r.round_no, g)
   }
   return Array.from(map.entries()).sort((a, b) => a[0] - b[0])
+}
+
+// 正文里的 [E12] / [E8–E13] 变成可点击链接，点开看这条证据到底是什么
+const CITE_RE = /\[E(\d+)(?:\s*[–—\-~]\s*E(\d+))?\]/g
+
+function linkCites(md: string): string {
+  return (md || '').replace(CITE_RE, (_m, a: string, b?: string) => {
+    const label = b ? `E${a}–E${b}` : `E${a}`
+    return `[${label}](#cite-${b ? `E${a}-E${b}` : `E${a}`})`
+  })
+}
+
+function citeIds(key: string): string[] {
+  const nums = key.replace(/^cite-/, '').split('-')
+  const from = Number((nums[0] || '').replace('E', ''))
+  const to = nums[1] ? Number(nums[1].replace('E', '')) : from
+  if (!Number.isFinite(from)) return []
+  const out: string[] = []
+  for (let i = from; i <= Math.min(to, from + 50); i += 1) out.push(`E${i}`)
+  return out
+}
+
+// 报告最后的证据附录表格默认折叠，避免一屏全是表格
+function splitAppendix(md: string): { body: string; appendix: string } {
+  const m = (md || '').match(/^##\s*5\.[^\n]*$/m)
+  if (!m || m.index === undefined) return { body: md || '', appendix: '' }
+  return { body: (md || '').slice(0, m.index), appendix: (md || '').slice(m.index) }
 }
 
 export default function ExpertPanel() {
@@ -263,8 +299,58 @@ export default function ExpertPanel() {
     : undefined
   const running = current && ['running', 'cancelling'].includes(current.status)
 
+  const evidenceMap = useMemo(() => {
+    const map = new Map<string, ExpertEvidence>()
+    for (const e of current?.evidence || []) map.set(e.id, e)
+    return map
+  }, [current?.evidence])
+
+  const [cite, setCite] = useState<{ title: string; items: ExpertEvidence[]; ids: string[] } | null>(
+    null,
+  )
+  const [allOpen, setAllOpen] = useState(false)
+  const [q, setQ] = useState('')
+
+  const openCite = (key: string) => {
+    const ids = citeIds(key)
+    const items = ids.map((id) => evidenceMap.get(id)).filter(Boolean) as ExpertEvidence[]
+    setCite({ title: key.replace(/^cite-/, '').replace('-', '–'), items, ids })
+  }
+
+  const citeAnchor = (
+    key: string,
+    children: React.ReactNode,
+  ) => (
+    <span className="cite-ref" title="点开查看这条证据" onClick={() => openCite(key)}>
+      {children}
+    </span>
+  )
+
+  const filteredEvidence = (current?.evidence || []).filter((e) => {
+    const needle = q.trim().toLowerCase()
+    if (!needle) return true
+    return (
+      (e.id || '').toLowerCase().includes(needle) ||
+      (e.source || '').toLowerCase().includes(needle) ||
+      (e.text || '').toLowerCase().includes(needle)
+    )
+  })
+
+  const report = splitAppendix(current?.final_report_md || '')
+  const mdComponents: any = {
+    a: ({ href, children }: any) =>
+      href?.startsWith('#cite-') ? (
+        citeAnchor(href, children)
+      ) : (
+        <a href={href} target="_blank" rel="noreferrer">
+          {children}
+        </a>
+      ),
+  }
+
   return (
-    <Row gutter={16}>
+    <>
+      <Row gutter={16}>
       <Col xs={24} lg={9}>
         <Card title="新建大佬分析" size="small">
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
@@ -406,6 +492,14 @@ export default function ExpertPanel() {
                     停止
                   </Button>
                 )}
+                <Button
+                  size="small"
+                  icon={<FileSearchOutlined />}
+                  onClick={() => setAllOpen(true)}
+                  disabled={!(current.evidence || []).length}
+                >
+                  证据 {(current.evidence || []).length || ''}
+                </Button>
                 {current.final_report_md && (
                   <Button
                     size="small"
@@ -515,11 +609,32 @@ export default function ExpertPanel() {
               )}
 
               {current.final_report_md ? (
-                <div className="expert-report">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {current.final_report_md}
-                  </ReactMarkdown>
-                </div>
+                <>
+                  <div className="expert-report">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                      {linkCites(report.body)}
+                    </ReactMarkdown>
+                  </div>
+                  {report.appendix && (
+                    <Collapse
+                      size="small"
+                      style={{ marginTop: 12 }}
+                      items={[
+                        {
+                          key: 'appendix',
+                          label: '证据附录（原始表格，正文点 E 编号也可直接查看）',
+                          children: (
+                            <div className="expert-report">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                                {linkCites(report.appendix)}
+                              </ReactMarkdown>
+                            </div>
+                          ),
+                        },
+                      ]}
+                    />
+                  )}
+                </>
               ) : (
                 running && (
                   <Alert
@@ -534,6 +649,73 @@ export default function ExpertPanel() {
           )}
         </Card>
       </Col>
-    </Row>
+      </Row>
+
+      <Drawer
+        open={!!cite}
+        onClose={() => setCite(null)}
+        width={560}
+        title={cite ? `证据 ${cite.title}` : '证据'}
+      >
+        {cite && cite.items.length === 0 ? (
+          <Alert
+            type="warning"
+            showIcon
+            message={`没有找到 ${cite.ids.join('、')} 的原文`}
+            description="这条编号来自本次运行之外（旧报告未保存证据包），重新生成一次报告后即可查看。"
+          />
+        ) : (
+          <List
+            size="small"
+            dataSource={cite?.items || []}
+            renderItem={(e) => (
+              <List.Item key={e.id}>
+                <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                  <Space size={6}>
+                    <Tag color="blue">{e.id}</Tag>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {e.source || e.kind || ''}
+                    </Typography.Text>
+                  </Space>
+                  <Typography.Text>{e.text}</Typography.Text>
+                </Space>
+              </List.Item>
+            )}
+          />
+        )}
+      </Drawer>
+
+      <Drawer
+        open={allOpen}
+        onClose={() => setAllOpen(false)}
+        width={640}
+        title={`本次分析的证据（${(current?.evidence || []).length} 条）`}
+      >
+        <Input
+          allowClear
+          placeholder="搜编号 / 平台 / 关键词，如 E93、拼多多、价格带"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          style={{ marginBottom: 12 }}
+        />
+        <List
+          size="small"
+          dataSource={filteredEvidence}
+          renderItem={(e) => (
+            <List.Item key={e.id}>
+              <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                <Space size={6}>
+                  <Tag color="blue">{e.id}</Tag>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {e.source || e.kind || ''}
+                  </Typography.Text>
+                </Space>
+                <Typography.Text>{e.text}</Typography.Text>
+              </Space>
+            </List.Item>
+          )}
+        />
+      </Drawer>
+    </>
   )
 }

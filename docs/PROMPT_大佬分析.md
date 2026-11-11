@@ -239,7 +239,7 @@ START
 - `get_top_products(task_id: str, batch: str, limit: int = 10)` → Top 商品（标题/价格/已售/店铺/链接）
 - `get_keyword_profile(task_id: str, batch: str)` → 标题关键词命中
 - `get_param_profile(task_id: str, batch: str)` → 参数画像
-- `get_clusters(task_id: str, batch: str)` → 卖点组合聚类
+- `get_selling_points(task_id: str, batch: str)` → 卖点词统计（标题命中词 + 参数 key=value）
 - `calculate(expression: str)` → 仅允许数字与 + - * / ( )，用 AST 安全求值，禁止 eval
 
 审查 Agent 额外拥有：

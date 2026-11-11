@@ -29,6 +29,7 @@ from ..browser import (
 from ..config import DATA_DIR
 from ..pace import get_pace
 from ..parse import parse_count, same_search_url
+from ..parse import _merge_split_price
 from ..sort_ui import ensure_sort
 
 SEARCH_URL = "https://mobile.yangkeduo.com/search_result.html?search_key={q}"
@@ -331,6 +332,10 @@ def is_degraded(text) -> bool:
 def parse_pdd_price(text) -> tuple[float | None, str]:
     """返回 (价格, 口径)。被遮挡的价格（如 ¥3.?）返回 (None, ...)，不做猜测。"""
     t = _clean(text)
+    # 兼容价格被拆成多个节点（"¥" + "0" + ".75"）的渲染，否则会误得 0
+    merged = _merge_split_price(t)
+    if merged != t:
+        t = merged
     for pat, label in ((_COUPON_PRICE_RE, "券后价"), (_PDD_PRICE_RE, "拼单价")):
         for m in pat.finditer(t):
             tail = t[m.end(): m.end() + 4]

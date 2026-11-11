@@ -1,4 +1,4 @@
-"""SSE 事件流：把采集/登录进度实时推给前端。"""
+"""控制层：SSE 事件流（采集/登录进度实时推送）。"""
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +6,7 @@ import asyncio
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from ..jobs import bus
+from ..services.collect_service import bus
 
 router = APIRouter()
 

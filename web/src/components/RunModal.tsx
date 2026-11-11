@@ -17,6 +17,7 @@ const STATUS_TEXT: Record<string, string> = {
   done: '已完成',
   failed: '失败',
   timeout: '超时',
+  pending_confirm: '待确认',
 }
 
 const STATUS_COLOR: Record<string, string> = {

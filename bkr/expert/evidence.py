@@ -6,12 +6,19 @@ import re
 from datetime import datetime
 from typing import Any
 
-from .. import db
+from .. import database
 from ..analysis import build_summary
 from ..analysis_profile import profile_for
 from ..parse import parse_price
+from ..repositories import snapshot_repo, task_repo
 
 PLATFORM_LABELS = {"tmall": "天猫", "1688": "1688", "pdd": "拼多多"}
+PROFILE_SOURCE_LABELS = {
+    "manual": "人工配置",
+    "llm": "自动生成",
+    "discovered": "自动发现",
+    "none": "未生成",
+}
 MAX_EVIDENCE_CHARS = 120_000
 DOC_CHUNK = 1000
 
@@ -34,21 +41,9 @@ def _positive(value) -> float | None:
 
 def batch_rows(task_id: str, batch: str) -> list[dict]:
     """读取一个批次的商品行（价格/销量/标题/店铺/参数），复用分析口径。"""
-    conn = db.connect()
+    conn = database.connect()
     try:
-        rows = conn.execute(
-            """SELECT s.item_id, s.platform,
-                      COALESCE(p.title, s.title) AS title,
-                      s.price_final, s.price_text, s.sold_lb, s.sold_text, s.cart_lb,
-                      COALESCE(p.shop_name, s.shop_name) AS shop_name,
-                      COALESCE(p.image_url, s.image_url) AS image_url,
-                      p.product_url, p.params_json, p.sku_names, s.is_detail
-               FROM fact_snapshot s
-               LEFT JOIN product p
-                 ON p.item_id = s.item_id AND p.platform = s.platform
-               WHERE s.task_id=? AND s.batch=?""",
-            (task_id, batch),
-        ).fetchall()
+        rows = snapshot_repo.list_task_products(conn, task_id, batch)
     finally:
         conn.close()
 
@@ -79,12 +74,9 @@ def batch_rows(task_id: str, batch: str) -> list[dict]:
 
 
 def task_info(task_id: str) -> dict:
-    conn = db.connect()
+    conn = database.connect()
     try:
-        row = conn.execute(
-            "SELECT task_id, name, platform, keywords FROM dim_task WHERE task_id=?",
-            (task_id,),
-        ).fetchone()
+        row = task_repo.get_task(conn, task_id)
     finally:
         conn.close()
     if not row:
@@ -263,12 +255,28 @@ def build_evidence(sources: list[dict]) -> dict[str, Any]:
                     for p in (summary.get("params") or [])[:8]
                 ),
                 summary.get("params"))
+            points = summary.get("selling_points") or {}
             add("distribution", source_label,
-                "卖点组合：" + "；".join(
-                    f"{c.get('cluster')}（{c.get('count')} 个，均价 {_fmt_num(c.get('avg_price'))}，均销量 {_fmt_num(c.get('avg_sold'))}）"
-                    for c in (summary.get("clusters") or [])[:8]
+                "卖点词（标题命中）：" + "；".join(
+                    f"{k.get('word')}（{k.get('items')} 个商品，均价 {_fmt_num(k.get('avg_price'))}，"
+                    f"均销量 {_fmt_num(k.get('avg_sold'))}，覆盖 "
+                    f"{round(float(k.get('coverage') or 0) * 100)}%）"
+                    for k in (points.get("title") or [])[:12]
                 ),
-                summary.get("clusters"))
+                points.get("title"))
+            add("distribution", source_label,
+                "参数卖点：" + "；".join(
+                    f"{p.get('key')}={p.get('value')}（{p.get('items')} 个商品，"
+                    f"均价 {_fmt_num(p.get('avg_price'))}，均销量 {_fmt_num(p.get('avg_sold'))}）"
+                    for p in (points.get("params") or [])[:12]
+                ),
+                points.get("params"))
+            prof = summary.get("profile") or {}
+            add("metric", source_label,
+                f"卖点词表：来源 {PROFILE_SOURCE_LABELS.get(prof.get('source') or 'none', '未生成')}，"
+                f"{prof.get('words') or 0} 个词，覆盖商品 "
+                f"{round(float(prof.get('coverage') or 0) * 100)}%",
+                prof)
             for p in (summary.get("top_products") or [])[:10]:
                 add("product", source_label,
                     f"TOP 商品：{p.get('title')}；价格 {_fmt_num(p.get('price_final'))}；"

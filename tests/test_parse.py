@@ -64,6 +64,16 @@ def test_parse_price():
     assert parse_price("没有价格") is None
 
 
+def test_parse_price_1688_split_spans():
+    """1688 详情把价格拆成 <span>¥</span><span>0</span><span>.75</span>，
+    innerText 变成 "¥\\n0\\n.75"；不能解析成 0。"""
+    assert parse_price("新人价\n¥\n0\n.75\n首件预估到手价") == 0.75
+    assert parse_price("¥\n1\n.75\n1个起批") == 1.75
+    assert parse_price("¥\n12\n.5") == 12.5
+    # 正常单行文本不受影响
+    assert parse_price("¥\n179") == 179.0
+
+
 def test_final_price_with_reduction():
     assert compute_final_price("优惠前 ¥179", "已享受：官方立减30元") == 149.0
 

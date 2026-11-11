@@ -6,8 +6,8 @@ import os
 import time
 from typing import Any, Callable
 
-from .. import db
-from . import store
+from .. import database
+from ..repositories import expert_repo
 from .evidence import PLATFORM_LABELS, build_evidence, pack_for_prompt
 from .prompts import (
     REVIEWER_SYSTEM,
@@ -272,6 +272,12 @@ def _reviewer(state: ExpertState) -> dict:
     return review
 
 
+def _repo(fn, *args, **kwargs):
+    """在独立连接上执行一次数据访问（图节点执行期间）。"""
+    with database.connection() as conn:
+        return fn(conn, *args, **kwargs)
+
+
 def build_graph(run_id: str, publisher: Callable[[str, dict], None],
                 cancel_event):
     """构造并编译 LangGraph；每次运行独立闭包，方便推送事件。"""
@@ -292,7 +298,8 @@ def build_graph(run_id: str, publisher: Callable[[str, dict], None],
         evidence = build_evidence(state.get("sources") or [])
         if not evidence.get("evidence"):
             raise RuntimeError("没有可用证据：请选择至少一个非空批次，或上传报告/笔记")
-        store.update_run(run_id, iterations=0)
+        _repo(expert_repo.save_evidence, run_id, evidence.get("evidence") or [])
+        _repo(expert_repo.update_run, run_id, iterations=0)
         publisher("stage", {
             "stage": "evidence_done",
             "message": f"证据整理完成（{evidence['meta']['evidence_count']} 条）",
@@ -307,8 +314,8 @@ def build_graph(run_id: str, publisher: Callable[[str, dict], None],
         draft = _writer(state, None, round_no)
         if not (draft or "").strip():
             raise RuntimeError("大佬 Agent 返回了空报告")
-        store.add_round(run_id, round_no, "draft", content_md=draft)
-        store.update_run(run_id, iterations=round_no)
+        _repo(expert_repo.add_round, run_id, round_no, "draft", content_md=draft)
+        _repo(expert_repo.update_run, run_id, iterations=round_no)
         return {
             "draft_md": draft,
             "iteration": round_no,
@@ -323,7 +330,8 @@ def build_graph(run_id: str, publisher: Callable[[str, dict], None],
         publisher("stage", {"stage": "review", "iteration": round_no,
                             "message": "审查 Agent 正在审查"})
         review = _reviewer(state)
-        store.add_round(
+        _repo(
+            expert_repo.add_round,
             run_id, round_no, "review",
             review=review,
             verdict=review.get("verdict"),
@@ -358,8 +366,8 @@ def build_graph(run_id: str, publisher: Callable[[str, dict], None],
         draft = _writer(state, review, round_no)
         if not (draft or "").strip():
             raise RuntimeError("大佬 Agent 修订后返回了空报告")
-        store.add_round(run_id, round_no, "revise", content_md=draft)
-        store.update_run(run_id, iterations=round_no)
+        _repo(expert_repo.add_round, run_id, round_no, "revise", content_md=draft)
+        _repo(expert_repo.update_run, run_id, iterations=round_no)
         return {
             "draft_md": draft,
             "iteration": round_no,
@@ -370,14 +378,14 @@ def build_graph(run_id: str, publisher: Callable[[str, dict], None],
 
     def node_finalize(state: ExpertState) -> dict:
         draft = state.get("draft_md") or ""
-        store.update_run(run_id, status="done", final_report_md=draft)
+        _repo(expert_repo.update_run, run_id, status="done", final_report_md=draft)
         publisher("done", {"status": "done", "score": (state.get("review") or {}).get("score")})
         return {"status": "done", "best_draft_md": draft}
 
     def node_human(state: ExpertState) -> dict:
         draft = state.get("best_draft_md") or state.get("draft_md") or ""
         review = state.get("review") or {}
-        store.update_run(run_id, status="needs_human", final_report_md=draft)
+        _repo(expert_repo.update_run, run_id, status="needs_human", final_report_md=draft)
         publisher("done", {"status": "needs_human", "score": review.get("score"),
                            "message": "达到最大轮次仍未通过，需人工复核"})
         return {"status": "needs_human", "draft_md": draft}

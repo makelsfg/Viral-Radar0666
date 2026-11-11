@@ -9,9 +9,10 @@ import argparse
 import json
 import os
 
-from . import db
+from . import database
 from .collector import run_task
 from .config import Task, state_path_for
+from .repositories import task_repo
 
 
 def _loads(value, default):
@@ -22,20 +23,19 @@ def _loads(value, default):
 
 
 def load_task(task_id: str) -> Task:
-    conn = db.connect()
+    conn = database.connect()
     try:
-        r = conn.execute("SELECT * FROM dim_task WHERE task_id=?", (task_id,)).fetchone()
+        r = task_repo.get_task(conn, task_id)
     finally:
         conn.close()
     if not r:
         raise SystemExit(f"任务不存在：{task_id}")
-    keys = r.keys()
     return Task(
         task_id=r["task_id"],
         name=r["name"],
         keywords=_loads(r["keywords"], [r["name"]]),
-        platform=(r["platform"] if "platform" in keys else "tmall") or "tmall",
-        pace=(r["pace"] if "pace" in keys else "safe") or "safe",
+        platform=r.get("platform") or "tmall",
+        pace=r.get("pace") or "safe",
         sort=r["sort"] or "sale-desc",
         pages=int(r["pages"] or 1),
         detail_top=int(r["detail_top"] or 6),

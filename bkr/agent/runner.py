@@ -5,11 +5,21 @@ import os
 import time
 import uuid
 
-from . import store
+from .. import database
+from ..repositories import agent_repo
 from .observe import observe, state_hash
 from .policy import TOOLS_DESC, llm_decide, rule_decide
 from .prompts import build_system, build_user
 from .tools import ToolBox
+
+
+def _repo(fn, *args, **kwargs):
+    """轨迹记录失败不影响采集：静默吞掉异常。"""
+    try:
+        with database.connection() as conn:
+            return fn(conn, *args, **kwargs)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def agent_enabled() -> bool:
@@ -45,7 +55,7 @@ def supervised_recover(page, task, reason: str = "", use_llm: bool | None = None
     deadline = time.time() + max_seconds
 
     run_id = uuid.uuid4().hex[:10]
-    store.start_run(run_id, batch, platform, task_id)
+    _repo(agent_repo.start_run, run_id, batch, platform, task_id)
     print(f"  [agent] 接管（原因：{reason or '确定性路径失败'}；llm={'on' if use_llm else 'off'}；"
           f"budget steps={max_steps}）")
 
@@ -83,7 +93,7 @@ def supervised_recover(page, task, reason: str = "", use_llm: bool | None = None
         if tool == "finish":
             res = toolbox.call("extract_candidates", {"strategy": "ssr_script"})
             got = len(toolbox.last_items)
-            store.add_step(run_id, idx, sig, state, tool, args, _brief(res), thought)
+            _repo(agent_repo.add_step, run_id, idx, sig, state, tool, args, _brief(res), thought)
             if got > 0:
                 items = toolbox.last_items
                 status = "success"
@@ -101,12 +111,12 @@ def supervised_recover(page, task, reason: str = "", use_llm: bool | None = None
         if tool == "escalate":
             status = "escalated"
             summary = str(args.get("message") or args.get("reason_code") or "escalate")
-            store.add_step(run_id, idx, sig, state, tool, args, {"ok": False}, thought)
+            _repo(agent_repo.add_step, run_id, idx, sig, state, tool, args, {"ok": False}, thought)
             steps = idx
             break
 
         result = toolbox.call(tool, args)
-        store.add_step(run_id, idx, sig, state, tool, args, _brief(result), thought)
+        _repo(agent_repo.add_step, run_id, idx, sig, state, tool, args, _brief(result), thought)
         history.append({"tool": tool, "result": _brief(result)})
         steps = idx
 
@@ -129,8 +139,8 @@ def supervised_recover(page, task, reason: str = "", use_llm: bool | None = None
                 summary = "连续三步页面无变化，停止（避免空转）"
                 break
 
-    store.finish_run(run_id, status, steps, llm_calls, summary or "未完成")
+    _repo(agent_repo.finish_run, run_id, status, steps, llm_calls, summary or "未完成")
     if status == "success":
-        store.mark_batch_recovered(batch, task_id)
+        _repo(agent_repo.mark_batch_recovered, batch, task_id)
     print(f"  [agent] 结束：{status}；{summary}（steps={steps}, llm_calls={llm_calls}）")
     return {"ok": status == "success", "status": status, "items": items, "summary": summary}

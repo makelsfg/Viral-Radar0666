@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Alert,
   App as AntApp,
@@ -8,7 +8,6 @@ import {
   Drawer,
   Image,
   Popconfirm,
-  Select,
   Space,
   Switch,
   Table,
@@ -19,37 +18,34 @@ import {
 import type { TableProps } from 'antd'
 import { DeleteOutlined, DownloadOutlined, ReloadOutlined } from '@ant-design/icons'
 import { api } from '../api'
-import { useSse } from '../sse'
-import type { ProductDetail, ProductRow, TaskInfo } from '../types'
+import type { ProductDetail, ProductRow } from '../types'
 
-export default function DataPanel() {
+export default function DataPanel({
+  taskId,
+  batch,
+  onlyDetail,
+  onOnlyDetailChange,
+  reloadKey,
+  onDeleteTask,
+  onDeleteBatch,
+}: {
+  taskId?: string
+  batch?: string
+  onlyDetail: boolean
+  onOnlyDetailChange: (v: boolean) => void
+  reloadKey?: number
+  onDeleteTask?: () => void
+  onDeleteBatch?: () => void
+}) {
   const { message } = AntApp.useApp()
-  const [tasks, setTasks] = useState<TaskInfo[]>([])
-  const [taskId, setTaskId] = useState<string | undefined>()
-  const [batch, setBatch] = useState<string | undefined>()
   const [rows, setRows] = useState<ProductRow[]>([])
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState<ProductDetail | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [onlyDetail, setOnlyDetail] = useState(true)
-  const currentTaskRef = useRef<string | undefined>(undefined)
-  currentTaskRef.current = taskId
-
-  const loadTasks = useCallback(async (keep?: { taskId?: string; batch?: string }) => {
-    const list = await api.tasks()
-    setTasks(list)
-    const wantedTask =
-      keep?.taskId && list.some((t) => t.task_id === keep.taskId) ? keep.taskId : list[0]?.task_id
-    setTaskId(wantedTask)
-    const task = list.find((t) => t.task_id === wantedTask)
-    const wantedBatch =
-      keep?.batch && task?.batches.includes(keep.batch) ? keep.batch : task?.batches[0]
-    setBatch(wantedBatch)
-  }, [])
 
   const loadRows = useCallback(
     async (t?: string, b?: string, detailOnly = true) => {
-      if (!t || !b) {
+      if (!b) {
         setRows([])
         return
       }
@@ -66,20 +62,8 @@ export default function DataPanel() {
   )
 
   useEffect(() => {
-    loadTasks().catch((e: any) => message.error(e.message || '加载品类失败'))
-  }, [loadTasks, message])
-
-  useEffect(() => {
     loadRows(taskId, batch, onlyDetail)
-  }, [taskId, batch, onlyDetail, loadRows])
-
-  useSse((e: any) => {
-    if (e?.type !== 'job' || e.job?.type !== 'collect' || e.job.status !== 'done') return
-    const currentTask = currentTaskRef.current
-    loadTasks({ taskId: currentTask, batch: e.job.batch })
-      .then(() => loadRows(currentTask, e.job.batch, onlyDetail))
-      .catch(() => undefined)
-  })
+  }, [taskId, batch, onlyDetail, reloadKey, loadRows])
 
   const openDetail = async (row: ProductRow) => {
     try {
@@ -87,28 +71,6 @@ export default function DataPanel() {
       setDrawerOpen(true)
     } catch (e: any) {
       message.error(e.message || '加载详情失败')
-    }
-  }
-
-  const deleteTask = async () => {
-    if (!taskId) return
-    try {
-      await api.deleteTask(taskId)
-      message.success('品类已删除')
-      await loadTasks()
-    } catch (e: any) {
-      message.error(e.message || '删除品类失败')
-    }
-  }
-
-  const deleteBatch = async () => {
-    if (!taskId || !batch) return
-    try {
-      await api.deleteBatch(taskId, batch)
-      message.success('批次已删除')
-      await loadTasks({ taskId })
-    } catch (e: any) {
-      message.error(e.message || '删除批次失败')
     }
   }
 
@@ -187,60 +149,44 @@ export default function DataPanel() {
     },
   ]
 
-  const current = tasks.find((t) => t.task_id === taskId)
-
   return (
     <Card
       title="采集结果"
       extra={
         <Space wrap>
-          <Select
-            style={{ width: 200 }}
-            placeholder="选择品类"
-            value={taskId}
-            onChange={(v) => {
-              setTaskId(v)
-              const t = tasks.find((x) => x.task_id === v)
-              setBatch(t?.batches[0])
-            }}
-            options={tasks.map((t) => ({ value: t.task_id, label: t.name }))}
-          />
-          <Popconfirm
-            title="删除该品类？"
-            description="将删除该品类及其所有批次数据，且不可恢复。"
-            okText="删除"
-            okButtonProps={{ danger: true }}
-            cancelText="取消"
-            onConfirm={deleteTask}
-            disabled={!taskId}
-          >
-            <Tooltip title="删除当前品类">
-              <Button danger type="text" icon={<DeleteOutlined />} disabled={!taskId} />
-            </Tooltip>
-          </Popconfirm>
-          <Select
-            style={{ width: 200 }}
-            placeholder="选择批次"
-            value={batch}
-            onChange={setBatch}
-            options={(current?.batches || []).map((b) => ({ value: b, label: b }))}
-          />
-          <Popconfirm
-            title="删除该批次？"
-            description="将删除该批次的采集结果，且不可恢复。"
-            okText="删除"
-            okButtonProps={{ danger: true }}
-            cancelText="取消"
-            onConfirm={deleteBatch}
-            disabled={!batch}
-          >
-            <Tooltip title="删除当前批次">
-              <Button danger type="text" icon={<DeleteOutlined />} disabled={!batch} />
-            </Tooltip>
-          </Popconfirm>
+          {onDeleteTask && (
+            <Popconfirm
+              title="删除该品类？"
+              description="将删除该品类及其所有批次数据，且不可恢复。"
+              okText="删除"
+              okButtonProps={{ danger: true }}
+              cancelText="取消"
+              onConfirm={onDeleteTask}
+              disabled={!taskId}
+            >
+              <Tooltip title="删除当前品类">
+                <Button danger type="text" icon={<DeleteOutlined />} disabled={!taskId} />
+              </Tooltip>
+            </Popconfirm>
+          )}
+          {onDeleteBatch && (
+            <Popconfirm
+              title="删除该批次？"
+              description="将删除该批次的采集结果，且不可恢复。"
+              okText="删除"
+              okButtonProps={{ danger: true }}
+              cancelText="取消"
+              onConfirm={onDeleteBatch}
+              disabled={!batch}
+            >
+              <Tooltip title="删除当前批次">
+                <Button danger type="text" icon={<DeleteOutlined />} disabled={!batch} />
+              </Tooltip>
+            </Popconfirm>
+          )}
           <Switch
             checked={onlyDetail}
-            onChange={setOnlyDetail}
+            onChange={onOnlyDetailChange}
             checkedChildren="只看已采详情"
             unCheckedChildren="含未采候选"
           />
@@ -251,12 +197,10 @@ export default function DataPanel() {
             type="primary"
             ghost
             icon={<DownloadOutlined />}
-            disabled={!taskId || !batch}
+            disabled={!batch}
             href={
-              taskId && batch
-                ? `/api/export?task_id=${encodeURIComponent(taskId)}&batch=${encodeURIComponent(
-                    batch,
-                  )}&only_detail=${onlyDetail ? 1 : 0}`
+              batch
+                ? `/api/export?batch=${encodeURIComponent(batch)}&only_detail=${onlyDetail ? 1 : 0}`
                 : undefined
             }
           >
@@ -278,15 +222,15 @@ export default function DataPanel() {
         </Space>
       }
     >
-      {tasks.length === 0 && (
+      {!batch && (
         <Alert
           type="info"
           showIcon
           message="还没有采集数据"
-          description="切换到「采集」页，输入商品关键词并开始采集；完成后数据会出现在这里。"
+          description="在上方输入商品关键词并开始采集；完成后数据会自动出现在这里。"
         />
       )}
-      {tasks.length > 0 && rows.length === 0 && !loading && (
+      {batch && rows.length === 0 && !loading && (
         <Alert
           type="info"
           showIcon
@@ -294,7 +238,7 @@ export default function DataPanel() {
           description="可以切换批次，或关掉「只看已采详情」查看候选商品。"
           action={
             onlyDetail ? (
-              <Button size="small" onClick={() => setOnlyDetail(false)}>
+              <Button size="small" onClick={() => onOnlyDetailChange(false)}>
                 显示候选商品
               </Button>
             ) : undefined
@@ -302,9 +246,9 @@ export default function DataPanel() {
         />
       )}
 
-      {tasks.length > 0 && (
+      {batch && (
         <Table<ProductRow>
-          rowKey="item_id"
+          rowKey={(r) => `${r.platform}-${r.item_id}`}
           size="middle"
           loading={loading}
           columns={columns}

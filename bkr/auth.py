@@ -95,15 +95,16 @@ def probe_authorized(platform: str) -> tuple[bool, bool]:
 
 def effective_authorized(platform: str) -> bool:
     """UI 展示用：优先实时检查；文件被锁时回退到数据库里的授权状态。"""
-    from . import db
+    from . import database
+    from .repositories import platform_auth_repo
 
     ok, reliable = probe_authorized(platform)
-    conn = db.connect()
+    conn = database.connect()
     try:
         if reliable:
-            db.set_platform_auth(conn, platform, ok)
+            platform_auth_repo.set_auth(conn, platform, ok)
             return ok
-        stored = db.get_platform_auth(conn, platform)
+        stored = platform_auth_repo.get_auth(conn, platform)
         return bool(stored)
     finally:
         conn.close()
